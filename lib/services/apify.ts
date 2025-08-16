@@ -120,6 +120,43 @@ export interface ScrapeCommentsParams {
   pageNumber?: number
 }
 
+// Types for LinkedIn Profile Posts scraper (based on instructions.md)
+export interface ApifyProfilePostData {
+  type: string
+  isActivity: boolean
+  urn: string
+  url: string
+  timeSincePosted: string
+  shareUrn: string
+  text: string
+  comments: any[]
+  reactions: any[]
+  numShares: number
+  numLikes: number
+  numComments: number
+  author: {
+    firstName: string
+    lastName: string
+    occupation: string
+    id: string
+    publicId: string
+    profileId: string
+    picture: string
+  }
+  authorProfileId: string
+  authorName: string
+  authorProfileUrl: string
+  postedAtTimestamp: number
+  postedAtISO: string
+  inputUrl: string
+}
+
+export interface ScrapeProfilePostsParams {
+  profileUrl: string
+  scrapeUntilDate?: string // ISO date string
+  maxPosts?: number
+}
+
 export class ApifyService {
   private client: ApifyClient
 
@@ -318,6 +355,44 @@ export class ApifyService {
 
     console.log(`Total comments collected: ${allComments.length}`)
     return allComments
+  }
+
+  /**
+   * Scrape posts from a LinkedIn profile
+   */
+  async scrapeProfilePosts(params: ScrapeProfilePostsParams): Promise<ApifyProfilePostData[]> {
+    const input: any = {
+      deepScrape: false,
+      rawData: false,
+      urls: [params.profileUrl]
+    }
+
+    // Add max posts limit only if provided by user
+    if (params.maxPosts) {
+      input.limitPerSource = params.maxPosts
+    }
+
+    // Add scrape until date if provided
+    if (params.scrapeUntilDate) {
+      input.scrapeUntil = params.scrapeUntilDate
+    }
+
+    try {
+      // Run the LinkedIn Profile Posts Scraper using the actor ID
+      const run = await this.client.actor('Wpp1BZ6yGWjySadk3').call(input)
+      
+      if (run.status !== 'SUCCEEDED') {
+        throw new Error(`Apify run failed with status: ${run.status}`)
+      }
+
+      // Fetch results from the dataset
+      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
+      
+      return items as unknown as ApifyProfilePostData[]
+    } catch (error) {
+      console.error('Error scraping profile posts:', error)
+      throw new Error(`Failed to scrape profile posts: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   /**

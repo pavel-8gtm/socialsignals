@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import * as z from 'zod'
@@ -8,13 +8,16 @@ import { createClient } from '@/lib/supabase/client'
 import { validateLinkedInPosts, type LinkedInPostData } from '@/lib/utils/linkedin'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { ChevronDownIcon } from 'lucide-react'
 import type { Database } from '@/lib/types/database.types'
 
 type Post = Database['public']['Tables']['posts']['Row'] & {
@@ -24,6 +27,12 @@ type Post = Database['public']['Tables']['posts']['Row'] & {
 
 const formSchema = z.object({
   postUrls: z.string().min(1, 'Please enter at least one LinkedIn post URL or ID'),
+})
+
+const profileFormSchema = z.object({
+  profileUrl: z.string().min(1, 'Please enter a LinkedIn profile URL').url('Please enter a valid URL'),
+  scrapeUntilDate: z.string().optional(),
+  maxPosts: z.string().optional(),
 })
 
 export default function PostsPage() {
@@ -36,6 +45,8 @@ export default function PostsPage() {
   const [user, setUser] = useState<any>(null)
   const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
+  const [showProfileDialog, setShowProfileDialog] = useState(false)
+  const [isScrapingProfile, setIsScrapingProfile] = useState(false)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'metadata' | 'reactions' | 'comments' | 'delete' | null>(null)
   const [previewPost, setPreviewPost] = useState<Post | null>(null)
@@ -43,12 +54,25 @@ export default function PostsPage() {
   const [showEngagementDialog, setShowEngagementDialog] = useState(false)
   const [engagementData, setEngagementData] = useState<{ post: Post; type: 'reactions' | 'comments'; profiles: any[] } | null>(null)
   const [loadingEngagement, setLoadingEngagement] = useState(false)
+  const [sortBy, setSortBy] = useState<'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | null>(null)
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [showNewEngagementOnly, setShowNewEngagementOnly] = useState(false)
+  const [showUnscrapedOnly, setShowUnscrapedOnly] = useState(false)
   const supabase = createClient()
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       postUrls: '',
+    },
+  })
+
+  const profileForm = useForm<z.infer<typeof profileFormSchema>>({
+    resolver: zodResolver(profileFormSchema),
+    defaultValues: {
+      profileUrl: '',
+      scrapeUntilDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 7 days ago
+      maxPosts: '',
     },
   })
 
@@ -122,10 +146,23 @@ export default function PostsPage() {
   }
 
   function toggleSelectAll() {
-    if (selectedPosts.size === posts.length) {
-      setSelectedPosts(new Set())
+    // Get the currently filtered posts
+    const filteredPosts = filteredAndSortedPosts
+    const filteredIds = filteredPosts.map(post => post.id)
+    
+    // Check if all filtered posts are selected
+    const allFilteredSelected = filteredIds.every(id => selectedPosts.has(id))
+    
+    if (allFilteredSelected && filteredPosts.length > 0) {
+      // Deselect all filtered posts
+      const newSelected = new Set(selectedPosts)
+      filteredIds.forEach(id => newSelected.delete(id))
+      setSelectedPosts(newSelected)
     } else {
-      setSelectedPosts(new Set(posts.map(post => post.id)))
+      // Select all filtered posts (keeping any existing selections from other filters)
+      const newSelected = new Set(selectedPosts)
+      filteredIds.forEach(id => newSelected.add(id))
+      setSelectedPosts(newSelected)
     }
   }
 
@@ -146,6 +183,124 @@ export default function PostsPage() {
     }
     setShowConfirmDialog(false)
     setConfirmAction(null)
+  }
+
+  async function clearEngagementFlagsForPosts(postIds: string[]) {
+    if (postIds.length === 0) return
+
+    try {
+      const response = await fetch('/api/clear-engagement-flags', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          postIds: postIds
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        console.error('Failed to clear engagement flags:', data.error)
+        // Don't throw error here to avoid interrupting the main scraping flow
+      }
+    } catch (error) {
+      console.error('Error clearing engagement flags:', error)
+      // Don't throw error here to avoid interrupting the main scraping flow
+    }
+  }
+
+  async function scrapeBothEngagements() {
+    setIsSaving(true)
+    setError(null)
+    
+    try {
+      const postIds = Array.from(selectedPosts)
+
+      // Run reactions and comments scraping in parallel for much faster performance
+      const [reactionsResult, commentsResult] = await Promise.allSettled([
+        fetch('/api/scrape/reactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ postIds }),
+        }),
+        fetch('/api/scrape/comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ postIds }),
+        })
+      ])
+
+      // Check results
+      const reactionsSuccess = reactionsResult.status === 'fulfilled' && reactionsResult.value.ok
+      const commentsSuccess = commentsResult.status === 'fulfilled' && commentsResult.value.ok
+
+      // Clear engagement flags for successfully scraped posts
+      await clearEngagementFlagsForPosts(postIds)
+
+      // Set appropriate success/error message
+      if (reactionsSuccess && commentsSuccess) {
+        setSuccess(`Successfully scraped both reactions and comments for ${selectedPosts.size} posts (ran in parallel)`)
+      } else if (reactionsSuccess || commentsSuccess) {
+        const scraped = reactionsSuccess ? 'reactions' : 'comments'
+        const failed = reactionsSuccess ? 'comments' : 'reactions'
+        setSuccess(`Successfully scraped ${scraped} for ${selectedPosts.size} posts. ${failed} scraping had issues.`)
+      } else {
+        setError(`Failed to scrape engagements for ${selectedPosts.size} posts`)
+      }
+      
+      setSelectedPosts(new Set()) // Clear selection
+      await loadPosts() // Reload posts to show updated data
+      
+    } catch (error) {
+      console.error('Error scraping engagements:', error)
+      setError('Failed to scrape engagements')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  async function scrapeComments() {
+    setIsSaving(true)
+    setError(null)
+    
+    try {
+      const response = await fetch('/api/scrape/comments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          postIds: Array.from(selectedPosts),
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to scrape comments')
+      }
+
+      let successMessage = `Successfully scraped ${result.totalScraped} comments from ${result.postsProcessed} post${result.postsProcessed !== 1 ? 's' : ''}`
+      
+      if (result.errors && result.errors.length > 0) {
+        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
+      }
+      
+      setSuccess(successMessage)
+      
+      // Automatically clear engagement flags for successfully scraped posts
+      await clearEngagementFlagsForPosts(Array.from(selectedPosts))
+      
+      setSelectedPosts(new Set()) // Clear selection
+      await loadPosts() // Reload posts to show updated scrape status
+      
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to scrape comments')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   async function loadEngagementData(post: Post, type: 'reactions' | 'comments') {
@@ -171,29 +326,8 @@ export default function PostsPage() {
         
         setEngagementData({ post, type, profiles: data || [] })
       } else {
-        // Load comments data
-        const { data, error } = await supabase
-          .from('comments')
-          .select(`
-            comment_text,
-            posted_at_date,
-            is_edited,
-            is_pinned,
-            total_reactions,
-            scraped_at,
-            profiles!inner(
-              id,
-              name,
-              headline,
-              profile_url
-            )
-          `)
-          .eq('post_id', post.id)
-          .order('posted_at_date', { ascending: false })
-
-        if (error) throw error
-        
-        setEngagementData({ post, type, profiles: data || [] })
+        // TODO: Implement comments loading when comments scraping is ready
+        setEngagementData({ post, type, profiles: [] })
       }
       
       setShowEngagementDialog(true)
@@ -242,6 +376,54 @@ export default function PostsPage() {
     }
   }
 
+  async function fetchMetadataForPosts(postUrls: string[]) {
+    try {
+      // First, get the database IDs for the newly added posts
+      const { data: posts, error: fetchError } = await supabase
+        .from('posts')
+        .select('id')
+        .eq('user_id', user?.id)
+        .in('post_url', postUrls)
+
+      if (fetchError || !posts || posts.length === 0) {
+        console.error('Failed to find newly added posts:', fetchError)
+        return
+      }
+
+      const postIds = posts.map(p => p.id)
+
+      // Now fetch metadata using the existing API
+      const response = await fetch('/api/scrape/post-metadata', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          postIds: postIds,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch metadata')
+      }
+
+      let successMessage = `Successfully fetched metadata for ${result.totalProcessed} newly added post${result.totalProcessed !== 1 ? 's' : ''}`
+      
+      if (result.errors && result.errors.length > 0) {
+        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
+      }
+      
+      setSuccess(successMessage)
+      await loadPosts() // Reload posts to show updated metadata
+      
+    } catch (error) {
+      console.error('Error fetching metadata for new posts:', error)
+      setError('Failed to fetch metadata for newly added posts')
+    }
+  }
+
   async function scrapeReactions() {
     setIsSaving(true)
     setError(null)
@@ -270,49 +452,15 @@ export default function PostsPage() {
       }
       
       setSuccess(successMessage)
+      
+      // Automatically clear engagement flags for successfully scraped posts
+      await clearEngagementFlagsForPosts(Array.from(selectedPosts))
+      
       setSelectedPosts(new Set()) // Clear selection
       await loadPosts() // Reload posts to show updated scrape status
       
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to scrape reactions')
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  async function scrapeComments() {
-    setIsSaving(true)
-    setError(null)
-    
-    try {
-      const response = await fetch('/api/scrape/comments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          postIds: Array.from(selectedPosts),
-        }),
-      })
-
-      const result = await response.json()
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to scrape comments')
-      }
-
-      let successMessage = `Successfully scraped ${result.totalScraped} comments from ${result.postsProcessed} post${result.postsProcessed !== 1 ? 's' : ''}`
-      
-      if (result.errors && result.errors.length > 0) {
-        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
-      }
-      
-      setSuccess(successMessage)
-      setSelectedPosts(new Set()) // Clear selection
-      await loadPosts() // Reload posts to show updated scrape status
-      
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to scrape comments')
     } finally {
       setIsSaving(false)
     }
@@ -355,7 +503,7 @@ export default function PostsPage() {
       const { error: insertError } = await supabase
         .from('posts')
         .upsert(postsToInsert, {
-          onConflict: 'user_id,post_url',
+          onConflict: 'user_id,post_id',
           ignoreDuplicates: false
         })
 
@@ -370,11 +518,15 @@ export default function PostsPage() {
           successMessage += `. ${duplicateCount} URL${duplicateCount !== 1 ? 's were' : ' was'} invalid and skipped.`
         }
         
+        successMessage += `. Fetching metadata...`
         setSuccess(successMessage)
         form.reset()
         setValidationResults([])
         setShowAddDialog(false) // Close the dialog
-        await loadPosts() // Reload the posts list
+        await loadPosts() // Reload the posts list to get the newly added posts
+        
+        // Automatically fetch metadata for the newly added posts
+        await fetchMetadataForPosts(validPosts.map(p => p.postUrl))
       }
     } catch (error) {
       setError('Failed to add posts')
@@ -382,6 +534,120 @@ export default function PostsPage() {
       setIsSaving(false)
     }
   }
+
+  async function onProfileSubmit(values: z.infer<typeof profileFormSchema>) {
+    setIsScrapingProfile(true)
+    setError(null)
+    setSuccess(null)
+
+    try {
+      if (!user) {
+        setError('Not authenticated')
+        return
+      }
+
+      const requestBody: any = {
+        profileUrl: values.profileUrl
+      }
+
+      // Add optional parameters if provided
+      if (values.scrapeUntilDate) {
+        requestBody.scrapeUntilDate = values.scrapeUntilDate
+      }
+
+      if (values.maxPosts && values.maxPosts.trim()) {
+        const maxPostsNumber = parseInt(values.maxPosts.trim())
+        if (!isNaN(maxPostsNumber) && maxPostsNumber > 0) {
+          requestBody.maxPosts = maxPostsNumber
+        }
+      }
+
+      const response = await fetch('/api/scrape/profile-posts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        setError(result.error || 'Failed to scrape profile posts')
+        return
+      }
+
+      setSuccess(result.message)
+      profileForm.reset()
+      setShowProfileDialog(false)
+      await loadPosts() // Reload the posts list
+    } catch (error) {
+      console.error('Profile scraping error:', error)
+      setError('Failed to scrape profile posts')
+    } finally {
+      setIsScrapingProfile(false)
+    }
+  }
+
+  // Sorting function
+  const handleSort = (column: 'posted_at' | 'author_name' | 'scraped_at') => {
+    if (sortBy === column) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortBy(column)
+      setSortOrder('desc') // Default to desc for new columns
+    }
+  }
+
+  // Sort posts based on current sort settings
+  const filteredAndSortedPosts = React.useMemo(() => {
+    // First apply filters
+    let filtered = posts
+    if (showNewEngagementOnly) {
+      filtered = posts.filter(post => 
+        post.engagement_needs_scraping === true && 
+        (post.last_reactions_scrape || post.last_comments_scrape)
+      )
+    } else if (showUnscrapedOnly) {
+      filtered = posts.filter(post => 
+        !post.last_reactions_scrape || !post.last_comments_scrape
+      )
+    }
+
+    // Then apply sorting
+    if (!sortBy) return filtered
+
+    const sorted = [...filtered].sort((a, b) => {
+      let valueA: any, valueB: any
+
+      switch (sortBy) {
+        case 'posted_at':
+          valueA = a.posted_at_iso ? new Date(a.posted_at_iso).getTime() : 0
+          valueB = b.posted_at_iso ? new Date(b.posted_at_iso).getTime() : 0
+          break
+        case 'author_name':
+          valueA = a.author_name || ''
+          valueB = b.author_name || ''
+          break
+        case 'scraped_at':
+          valueA = a.scraped_at ? new Date(a.scraped_at).getTime() : 0
+          valueB = b.scraped_at ? new Date(b.scraped_at).getTime() : 0
+          break
+        case 'created_at':
+          valueA = a.created_at ? new Date(a.created_at).getTime() : 0
+          valueB = b.created_at ? new Date(b.created_at).getTime() : 0
+          break
+        default:
+          return 0
+      }
+
+      if (valueA < valueB) return sortOrder === 'asc' ? -1 : 1
+      if (valueA > valueB) return sortOrder === 'asc' ? 1 : -1
+      return 0
+    })
+
+    return sorted
+  }, [posts, sortBy, sortOrder, showNewEngagementOnly, showUnscrapedOnly])
 
   // Watch for changes in the textarea to validate in real-time
   const watchedUrls = form.watch('postUrls')
@@ -411,10 +677,111 @@ export default function PostsPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-3xl font-bold text-gray-900">Posts</h1>
-          <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-            <DialogTrigger asChild>
-              <Button>Add Posts</Button>
-            </DialogTrigger>
+          <div className="flex gap-2">
+            <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
+              <DialogTrigger asChild>
+                <Button variant="outline">Scrape from Profile</Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Scrape Posts from LinkedIn Profile</DialogTitle>
+                  <DialogDescription>
+                    Enter a LinkedIn profile URL to automatically scrape and add all posts from that profile.
+                  </DialogDescription>
+                </DialogHeader>
+                
+                <Form {...profileForm}>
+                  <form onSubmit={profileForm.handleSubmit(onProfileSubmit)} className="space-y-4">
+                    <FormField
+                      control={profileForm.control}
+                      name="profileUrl"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>LinkedIn Profile URL</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="https://www.linkedin.com/in/username/"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Enter the full LinkedIn profile URL (e.g., https://www.linkedin.com/in/username/)
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <FormField
+                        control={profileForm.control}
+                        name="scrapeUntilDate"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Scrape Until Date (Optional)</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="date"
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Stop scraping posts older than this date
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={profileForm.control}
+                        name="maxPosts"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Max Posts (Optional)</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                placeholder="e.g., 50"
+                                min="1"
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Maximum number of posts to scrape
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setShowProfileDialog(false)
+                          profileForm.reset()
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        disabled={isScrapingProfile}
+                      >
+                        {isScrapingProfile ? 'Scraping Profile...' : 'Scrape Posts'}
+                      </Button>
+                    </div>
+                  </form>
+                </Form>
+              </DialogContent>
+            </Dialog>
+            <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+              <DialogTrigger asChild>
+                <Button>Add Manually</Button>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Add LinkedIn Posts</DialogTitle>
@@ -508,6 +875,7 @@ export default function PostsPage() {
               </Form>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
 
         {/* Success/Error Messages */}
@@ -531,34 +899,87 @@ export default function PostsPage() {
         {/* Action Buttons */}
         {posts.length > 0 && (
           <div className="flex items-center gap-2 mb-4">
-            <Button
-              variant="outline"
-              onClick={() => handleAction('metadata')}
-              disabled={selectedPosts.size === 0}
-            >
-              Fetch Metadata ({selectedPosts.size})
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleAction('reactions')}
-              disabled={selectedPosts.size === 0}
-            >
-              Scrape Reactions ({selectedPosts.size})
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleAction('comments')}
-              disabled={selectedPosts.size === 0}
-            >
-              Scrape Comments ({selectedPosts.size})
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => handleAction('delete')}
-              disabled={selectedPosts.size === 0}
-            >
-              Delete Posts ({selectedPosts.size})
-            </Button>
+            {/* Split Button for Scraping Engagements - First */}
+            <div className="flex">
+              <Button
+                onClick={scrapeBothEngagements}
+                disabled={selectedPosts.size === 0 || isSaving}
+                className="bg-black hover:bg-gray-800 text-white rounded-r-none border-r border-gray-600"
+              >
+                Scrape Engagements ({selectedPosts.size})
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    disabled={selectedPosts.size === 0 || isSaving}
+                    className="bg-black hover:bg-gray-800 text-white rounded-l-none px-2 border-l-0"
+                  >
+                    <ChevronDownIcon className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => handleAction('reactions')}>
+                    Scrape Reactions Only
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleAction('comments')}>
+                    Scrape Comments Only
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            
+            {/* Show these buttons only when posts are selected */}
+            {selectedPosts.size > 0 && (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => handleAction('metadata')}
+                  disabled={selectedPosts.size === 0}
+                >
+                  Fetch Post Metadata ({selectedPosts.size})
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleAction('delete')}
+                  disabled={selectedPosts.size === 0}
+                >
+                  Delete Posts ({selectedPosts.size})
+                </Button>
+              </>
+            )}
+
+            
+            <div className="ml-auto flex items-center gap-4">
+              <button
+                onClick={() => {
+                  setShowUnscrapedOnly(!showUnscrapedOnly)
+                  if (!showUnscrapedOnly) setShowNewEngagementOnly(false) // Clear other filter
+                }}
+                className={`text-sm cursor-pointer transition-colors border-b border-dotted ${
+                  showUnscrapedOnly 
+                    ? "text-blue-600 border-blue-600" 
+                    : "text-gray-600 hover:text-blue-600 border-gray-400 hover:border-blue-600"
+                }`}
+                title={showUnscrapedOnly ? "Show all posts" : "Show only posts that haven't been fully scraped (missing reactions or comments)"}
+              >
+                {showUnscrapedOnly ? "Show all posts" : "Show unscraped posts"}
+              </button>
+              
+              <button
+                onClick={() => {
+                  setShowNewEngagementOnly(!showNewEngagementOnly)
+                  if (!showNewEngagementOnly) setShowUnscrapedOnly(false) // Clear other filter
+                }}
+                className={`text-sm cursor-pointer transition-colors border-b border-dotted ${
+                  showNewEngagementOnly 
+                    ? "text-blue-600 border-blue-600" 
+                    : "text-gray-600 hover:text-blue-600 border-gray-400 hover:border-blue-600"
+                }`}
+                title={showNewEngagementOnly ? "Show all posts" : "Show only posts with increased engagement that need re-scraping"}
+              >
+                {showNewEngagementOnly ? "Show all posts" : "Show posts needing re-scrape"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -576,7 +997,7 @@ export default function PostsPage() {
             ) : posts.length === 0 ? (
               <div className="text-center py-12 text-gray-500">
                 <p className="text-lg mb-2">No posts added yet</p>
-                <p className="text-sm">Click "Add Posts" to get started with LinkedIn engagement analysis</p>
+                <p className="text-sm">Click "Add Manually" to get started with LinkedIn engagement analysis</p>
               </div>
             ) : (
               <Table>
@@ -584,21 +1005,74 @@ export default function PostsPage() {
                   <TableRow>
                     <TableHead className="w-12">
                       <Checkbox
-                        checked={selectedPosts.size === posts.length && posts.length > 0}
+                        checked={
+                          filteredAndSortedPosts.length > 0 && 
+                          filteredAndSortedPosts.every(post => selectedPosts.has(post.id))
+                        }
                         onCheckedChange={toggleSelectAll}
-                        aria-label="Select all posts"
+                        aria-label="Select all visible posts"
                       />
                     </TableHead>
                     <TableHead>Content</TableHead>
-                    <TableHead>Published</TableHead>
-                    <TableHead>Author</TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('posted_at')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Published
+                        {sortBy === 'posted_at' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('author_name')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Author
+                        {sortBy === 'author_name' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
                     <TableHead>Engagement</TableHead>
-                    <TableHead>Scraped</TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('scraped_at')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Scraped
+                        {sortBy === 'scraped_at' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('created_at')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Date Added
+                        {sortBy === 'created_at' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
+                    <TableHead>Last Scraped</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {posts.map((post) => (
+                  {filteredAndSortedPosts.map((post) => (
                     <TableRow key={post.id}>
                       <TableCell>
                         <Checkbox
@@ -609,27 +1083,15 @@ export default function PostsPage() {
                       </TableCell>
                       <TableCell className="max-w-xs">
                         <div className="flex items-center gap-2">
-                          <a
-                            href={post.post_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:text-blue-800 font-medium text-sm flex-shrink-0"
+                          <button
+                            onClick={() => {
+                              setPreviewPost(post)
+                              setShowPreviewDialog(true)
+                            }}
+                            className="text-blue-600 hover:text-blue-800 font-medium text-sm flex-shrink-0 border-b border-dotted border-blue-600 hover:border-blue-800 cursor-pointer"
                           >
                             Post {post.post_id}
-                          </a>
-                          {post.post_text && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-5 px-2 text-xs flex-shrink-0"
-                              onClick={() => {
-                                setPreviewPost(post)
-                                setShowPreviewDialog(true)
-                              }}
-                            >
-                              Preview
-                            </Button>
-                          )}
+                          </button>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -646,16 +1108,23 @@ export default function PostsPage() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <div className="flex gap-3 text-sm">
-                          <span className="flex items-center gap-1">
-                            👍 <span className="font-medium">{post.num_likes || 0}</span>
-                          </span>
-                          <span className="flex items-center gap-1">
-                            💬 <span className="font-medium">{post.num_comments || 0}</span>
-                          </span>
-                          <span className="flex items-center gap-1">
-                            🔄 <span className="font-medium">{post.num_shares || 0}</span>
-                          </span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex gap-3 text-sm">
+                            <span className="flex items-center gap-1">
+                              👍 <span className="font-medium">{post.num_likes || 0}</span>
+                            </span>
+                            <span className="flex items-center gap-1">
+                              💬 <span className="font-medium">{post.num_comments || 0}</span>
+                            </span>
+                            <span className="flex items-center gap-1">
+                              🔄 <span className="font-medium">{post.num_shares || 0}</span>
+                            </span>
+                          </div>
+                          {post.engagement_needs_scraping && (post.last_reactions_scrape || post.last_comments_scrape) && (
+                            <Badge variant="secondary" className="text-xs bg-orange-100 text-orange-800 border-orange-200">
+                              New
+                            </Badge>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -718,6 +1187,25 @@ export default function PostsPage() {
                             {post.last_comments_scrape ? '✓' : '○'} C
                           </Badge>
                         </div>
+                      </TableCell>
+                      <TableCell className="text-sm text-gray-600">
+                        {post.created_at 
+                          ? new Date(post.created_at).toLocaleDateString() 
+                          : 'Unknown'
+                        }
+                      </TableCell>
+                      <TableCell className="text-sm text-gray-600">
+                        {(() => {
+                          const lastReactionScrape = post.last_reactions_scrape ? new Date(post.last_reactions_scrape) : null
+                          const lastCommentScrape = post.last_comments_scrape ? new Date(post.last_comments_scrape) : null
+                          
+                          // Find the most recent scrape date
+                          const dates = [lastReactionScrape, lastCommentScrape].filter(Boolean)
+                          if (dates.length === 0) return 'Never'
+                          
+                          const mostRecent = new Date(Math.max(...dates.map(d => d.getTime())))
+                          return mostRecent.toLocaleDateString()
+                        })()}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -804,6 +1292,17 @@ export default function PostsPage() {
                     • {new Date(previewPost.posted_at_iso).toLocaleDateString()}
                   </span>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto h-6 px-2 text-xs"
+                  onClick={() => window.open(previewPost.post_url, '_blank')}
+                >
+                  <svg className="w-3 h-3 mr-1" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                  </svg>
+                  Open on LinkedIn
+                </Button>
               </div>
             )}
             <div className="space-y-4">
@@ -917,37 +1416,10 @@ export default function PostsPage() {
                               {profile.reaction_type}
                             </Badge>
                           )}
-                          {engagementData.type === 'comments' && profile.posted_at_date && (
-                            <span className="text-xs text-gray-500 flex-shrink-0">
-                              {new Date(profile.posted_at_date).toLocaleDateString()}
-                            </span>
-                          )}
                         </div>
                         {profile.profiles.headline && (
-                          <div className="text-xs text-gray-500 line-clamp-1 mb-1">
+                          <div className="text-xs text-gray-500 line-clamp-1">
                             {profile.profiles.headline}
-                          </div>
-                        )}
-                        {engagementData.type === 'comments' && profile.comment_text && (
-                          <div className="text-sm text-gray-700 bg-gray-50 p-2 rounded text-left">
-                            {profile.comment_text}
-                          </div>
-                        )}
-                        {engagementData.type === 'comments' && (
-                          <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
-                            {profile.is_edited && (
-                              <Badge variant="secondary" className="text-xs">
-                                Edited
-                              </Badge>
-                            )}
-                            {profile.is_pinned && (
-                              <Badge variant="secondary" className="text-xs">
-                                Pinned
-                              </Badge>
-                            )}
-                            {profile.total_reactions > 0 && (
-                              <span>{profile.total_reactions} reaction{profile.total_reactions !== 1 ? 's' : ''}</span>
-                            )}
                           </div>
                         )}
                       </div>

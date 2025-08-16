@@ -202,24 +202,7 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle>Getting Started</CardTitle>
-            <CardDescription>
-              Steps to start analyzing LinkedIn engagement data
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ol className="list-decimal list-inside space-y-2 text-sm text-gray-600">
-              <li>
-                {settings ? '✅' : '❌'} Configure your Apify API key above
-              </li>
-              <li>❌ Add LinkedIn posts to analyze</li>
-              <li>❌ Scrape reactions and comments</li>
-              <li>❌ View analytics dashboard</li>
-            </ol>
-          </CardContent>
-        </Card>
+
       </div>
     </div>
   )

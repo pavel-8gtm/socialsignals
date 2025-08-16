@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
+import { ChevronDownIcon, UserIcon, SettingsIcon, LogOutIcon } from 'lucide-react'
 import type { User } from '@supabase/supabase-js'
 
 export default function Navigation() {
@@ -42,7 +44,7 @@ export default function Navigation() {
     return (
       <nav className="border-b bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
+          <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <Link href="/" className="text-xl font-bold text-gray-900">
                 SocialSignals
@@ -60,53 +62,63 @@ export default function Navigation() {
   return (
     <nav className="border-b bg-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16">
+        <div className="flex justify-between items-center h-16">
           <div className="flex items-center">
             <Link href="/" className="text-xl font-bold text-gray-900">
               SocialSignals
             </Link>
           </div>
+          
+          {/* Centered Navigation Links */}
+          <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center space-x-6">
+            {user && (
+              <>
+                <Link 
+                  href="/posts" 
+                  className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                >
+                  Posts
+                </Link>
+                <Link 
+                  href="/profiles" 
+                  className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                >
+                  Profiles
+                </Link>
+              </>
+            )}
+          </div>
+          
           <div className="flex items-center space-x-4">
             {user ? (
               <>
-                <div className="flex items-center space-x-4">
-                  <Link 
-                    href="/posts" 
-                    className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  >
-                    Posts
-                  </Link>
-                  <Link 
-                    href="/profiles" 
-                    className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  >
-                    Profiles
-                  </Link>
-                  <Link 
-                    href="/settings" 
-                    className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  >
-                    Settings
-                  </Link>
-                  {process.env.NODE_ENV === 'development' && (
-                    <Link 
-                      href="/test-apify" 
-                      className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                    >
-                      Test Apify
-                    </Link>
-                  )}
-                  <span className="text-sm text-gray-600">
-                    {user.email}
-                  </span>
-                  <Button
-                    onClick={handleSignOut}
-                    variant="outline"
-                    size="sm"
-                  >
-                    Sign out
-                  </Button>
-                </div>
+                {/* User Menu Dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="flex items-center gap-2">
+                      <UserIcon className="h-4 w-4" />
+                      <ChevronDownIcon className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      <div className="px-2 py-1.5 text-sm text-gray-700">
+                        <div className="font-medium">{user.email}</div>
+                        <div className="text-xs text-gray-500">Signed in</div>
+                      </div>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem asChild>
+                        <Link href="/settings" className="flex items-center gap-2 w-full">
+                          <SettingsIcon className="h-4 w-4" />
+                          Settings
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={handleSignOut} className="flex items-center gap-2 text-red-600">
+                        <LogOutIcon className="h-4 w-4" />
+                        Sign out
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
               </>
             ) : (
               <div className="flex items-center space-x-2">

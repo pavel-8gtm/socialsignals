@@ -92,6 +92,8 @@ export type Database = {
           author_profile_id: string | null
           author_profile_url: string | null
           created_at: string | null
+          engagement_last_updated_at: string | null
+          engagement_needs_scraping: boolean | null
           id: string
           last_comments_scrape: string | null
           last_reactions_scrape: string | null
@@ -114,6 +116,8 @@ export type Database = {
           author_profile_id?: string | null
           author_profile_url?: string | null
           created_at?: string | null
+          engagement_last_updated_at?: string | null
+          engagement_needs_scraping?: boolean | null
           id?: string
           last_comments_scrape?: string | null
           last_reactions_scrape?: string | null
@@ -136,6 +140,8 @@ export type Database = {
           author_profile_id?: string | null
           author_profile_url?: string | null
           created_at?: string | null
+          engagement_last_updated_at?: string | null
+          engagement_needs_scraping?: boolean | null
           id?: string
           last_comments_scrape?: string | null
           last_reactions_scrape?: string | null
