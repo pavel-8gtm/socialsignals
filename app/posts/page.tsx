@@ -142,8 +142,7 @@ export default function PostsPage() {
     } else if (confirmAction === 'reactions') {
       await scrapeReactions()
     } else if (confirmAction === 'comments') {
-      // TODO: Implement comments scraping
-      setSuccess(`Comments scraping started for ${selectedPosts.size} post${selectedPosts.size !== 1 ? 's' : ''}`)
+      await scrapeComments()
     }
     setShowConfirmDialog(false)
     setConfirmAction(null)
@@ -172,8 +171,29 @@ export default function PostsPage() {
         
         setEngagementData({ post, type, profiles: data || [] })
       } else {
-        // TODO: Implement comments loading when comments scraping is ready
-        setEngagementData({ post, type, profiles: [] })
+        // Load comments data
+        const { data, error } = await supabase
+          .from('comments')
+          .select(`
+            comment_text,
+            posted_at_date,
+            is_edited,
+            is_pinned,
+            total_reactions,
+            scraped_at,
+            profiles!inner(
+              id,
+              name,
+              headline,
+              profile_url
+            )
+          `)
+          .eq('post_id', post.id)
+          .order('posted_at_date', { ascending: false })
+
+        if (error) throw error
+        
+        setEngagementData({ post, type, profiles: data || [] })
       }
       
       setShowEngagementDialog(true)
@@ -255,6 +275,44 @@ export default function PostsPage() {
       
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to scrape reactions')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  async function scrapeComments() {
+    setIsSaving(true)
+    setError(null)
+    
+    try {
+      const response = await fetch('/api/scrape/comments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          postIds: Array.from(selectedPosts),
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to scrape comments')
+      }
+
+      let successMessage = `Successfully scraped ${result.totalScraped} comments from ${result.postsProcessed} post${result.postsProcessed !== 1 ? 's' : ''}`
+      
+      if (result.errors && result.errors.length > 0) {
+        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
+      }
+      
+      setSuccess(successMessage)
+      setSelectedPosts(new Set()) // Clear selection
+      await loadPosts() // Reload posts to show updated scrape status
+      
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to scrape comments')
     } finally {
       setIsSaving(false)
     }
@@ -859,10 +917,37 @@ export default function PostsPage() {
                               {profile.reaction_type}
                             </Badge>
                           )}
+                          {engagementData.type === 'comments' && profile.posted_at_date && (
+                            <span className="text-xs text-gray-500 flex-shrink-0">
+                              {new Date(profile.posted_at_date).toLocaleDateString()}
+                            </span>
+                          )}
                         </div>
                         {profile.profiles.headline && (
-                          <div className="text-xs text-gray-500 line-clamp-1">
+                          <div className="text-xs text-gray-500 line-clamp-1 mb-1">
                             {profile.profiles.headline}
+                          </div>
+                        )}
+                        {engagementData.type === 'comments' && profile.comment_text && (
+                          <div className="text-sm text-gray-700 bg-gray-50 p-2 rounded text-left">
+                            {profile.comment_text}
+                          </div>
+                        )}
+                        {engagementData.type === 'comments' && (
+                          <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                            {profile.is_edited && (
+                              <Badge variant="secondary" className="text-xs">
+                                Edited
+                              </Badge>
+                            )}
+                            {profile.is_pinned && (
+                              <Badge variant="secondary" className="text-xs">
+                                Pinned
+                              </Badge>
+                            )}
+                            {profile.total_reactions > 0 && (
+                              <span>{profile.total_reactions} reaction{profile.total_reactions !== 1 ? 's' : ''}</span>
+                            )}
                           </div>
                         )}
                       </div>

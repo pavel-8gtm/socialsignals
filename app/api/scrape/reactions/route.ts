@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { ApifyService, type ApifyReactionData } from '@/lib/services/apify'
 import type { Database } from '@/lib/types/database.types'
 
-type Profile = Database['public']['Tables']['profiles']['Row']
+type Profile = Database['public']['Tables']['profiles']['Insert']
 type Reaction = Database['public']['Tables']['reactions']['Insert']
 
 export async function POST(request: NextRequest) {
@@ -165,9 +165,7 @@ async function processReactions(
     name: reactor.name,
     headline: reactor.headline,
     profile_url: reactor.profile_url,
-    profile_pictures: reactor.profile_pictures,
-    first_seen: new Date().toISOString(),
-    last_updated: new Date().toISOString()
+    profile_pictures: reactor.profile_pictures
   }))
 
   if (profilesToUpsert.length > 0) {
