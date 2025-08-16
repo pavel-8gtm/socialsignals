@@ -77,10 +77,10 @@ export default function Navigation() {
                     Posts
                   </Link>
                   <Link 
-                    href="/analytics" 
+                    href="/profiles" 
                     className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
                   >
-                    Analytics
+                    Profiles
                   </Link>
                   <Link 
                     href="/settings" 
@@ -88,6 +88,14 @@ export default function Navigation() {
                   >
                     Settings
                   </Link>
+                  {process.env.NODE_ENV === 'development' && (
+                    <Link 
+                      href="/test-apify" 
+                      className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                    >
+                      Test Apify
+                    </Link>
+                  )}
                   <span className="text-sm text-gray-600">
                     {user.email}
                   </span>

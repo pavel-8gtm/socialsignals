@@ -17,7 +17,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { Database } from '@/lib/types/database.types'
 
-type Post = Database['public']['Tables']['posts']['Row']
+type Post = Database['public']['Tables']['posts']['Row'] & {
+  reactions_count?: number
+  comments_count?: number
+}
 
 const formSchema = z.object({
   postUrls: z.string().min(1, 'Please enter at least one LinkedIn post URL or ID'),
@@ -34,7 +37,12 @@ export default function PostsPage() {
   const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
-  const [confirmAction, setConfirmAction] = useState<'reactions' | 'comments' | 'delete' | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'metadata' | 'reactions' | 'comments' | 'delete' | null>(null)
+  const [previewPost, setPreviewPost] = useState<Post | null>(null)
+  const [showPreviewDialog, setShowPreviewDialog] = useState(false)
+  const [showEngagementDialog, setShowEngagementDialog] = useState(false)
+  const [engagementData, setEngagementData] = useState<{ post: Post; type: 'reactions' | 'comments'; profiles: any[] } | null>(null)
+  const [loadingEngagement, setLoadingEngagement] = useState(false)
   const supabase = createClient()
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -59,13 +67,23 @@ export default function PostsPage() {
     try {
       const { data, error } = await supabase
         .from('posts')
-        .select('*')
+        .select(`
+          *,
+          reactions_count:reactions(count),
+          comments_count:comments(count)
+        `)
         .order('created_at', { ascending: false })
 
       if (error) {
         setError(error.message)
       } else {
-        setPosts(data || [])
+        // Transform the data to include counts
+        const postsWithCounts = (data || []).map(post => ({
+          ...post,
+          reactions_count: post.reactions_count?.[0]?.count || 0,
+          comments_count: post.comments_count?.[0]?.count || 0
+        }))
+        setPosts(postsWithCounts)
       }
     } catch (error) {
       setError('Failed to load posts')
@@ -111,23 +129,135 @@ export default function PostsPage() {
     }
   }
 
-  function handleAction(action: 'reactions' | 'comments' | 'delete') {
+  function handleAction(action: 'metadata' | 'reactions' | 'comments' | 'delete') {
     setConfirmAction(action)
     setShowConfirmDialog(true)
   }
 
-  function confirmActionHandler() {
+  async function confirmActionHandler() {
     if (confirmAction === 'delete') {
       deleteSelectedPosts()
+    } else if (confirmAction === 'metadata') {
+      await fetchMetadata()
     } else if (confirmAction === 'reactions') {
-      // TODO: Implement reactions scraping
-      setSuccess(`Reactions scraping started for ${selectedPosts.size} post${selectedPosts.size !== 1 ? 's' : ''}`)
+      await scrapeReactions()
     } else if (confirmAction === 'comments') {
       // TODO: Implement comments scraping
       setSuccess(`Comments scraping started for ${selectedPosts.size} post${selectedPosts.size !== 1 ? 's' : ''}`)
     }
     setShowConfirmDialog(false)
     setConfirmAction(null)
+  }
+
+  async function loadEngagementData(post: Post, type: 'reactions' | 'comments') {
+    setLoadingEngagement(true)
+    try {
+      if (type === 'reactions') {
+        const { data, error } = await supabase
+          .from('reactions')
+          .select(`
+            reaction_type,
+            scraped_at,
+            profiles!inner(
+              id,
+              name,
+              headline,
+              profile_url
+            )
+          `)
+          .eq('post_id', post.id)
+          .order('scraped_at', { ascending: false })
+
+        if (error) throw error
+        
+        setEngagementData({ post, type, profiles: data || [] })
+      } else {
+        // TODO: Implement comments loading when comments scraping is ready
+        setEngagementData({ post, type, profiles: [] })
+      }
+      
+      setShowEngagementDialog(true)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to load engagement data')
+    } finally {
+      setLoadingEngagement(false)
+    }
+  }
+
+  async function fetchMetadata() {
+    setIsSaving(true)
+    setError(null)
+    
+    try {
+      const response = await fetch('/api/scrape/post-metadata', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          postIds: Array.from(selectedPosts),
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch metadata')
+      }
+
+      let successMessage = `Successfully fetched metadata for ${result.totalProcessed} post${result.totalProcessed !== 1 ? 's' : ''}`
+      
+      if (result.errors && result.errors.length > 0) {
+        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
+      }
+      
+      setSuccess(successMessage)
+      setSelectedPosts(new Set()) // Clear selection
+      await loadPosts() // Reload posts to show updated data
+      
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to fetch metadata')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  async function scrapeReactions() {
+    setIsSaving(true)
+    setError(null)
+    
+    try {
+      const response = await fetch('/api/scrape/reactions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          postIds: Array.from(selectedPosts),
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to scrape reactions')
+      }
+
+      let successMessage = `Successfully scraped ${result.totalScraped} reactions from ${result.postsProcessed} post${result.postsProcessed !== 1 ? 's' : ''}`
+      
+      if (result.errors && result.errors.length > 0) {
+        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
+      }
+      
+      setSuccess(successMessage)
+      setSelectedPosts(new Set()) // Clear selection
+      await loadPosts() // Reload posts to show updated scrape status
+      
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to scrape reactions')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   function validateUrls(urls: string) {
@@ -345,6 +475,13 @@ export default function PostsPage() {
           <div className="flex items-center gap-2 mb-4">
             <Button
               variant="outline"
+              onClick={() => handleAction('metadata')}
+              disabled={selectedPosts.size === 0}
+            >
+              Fetch Metadata ({selectedPosts.size})
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => handleAction('reactions')}
               disabled={selectedPosts.size === 0}
             >
@@ -394,11 +531,12 @@ export default function PostsPage() {
                         aria-label="Select all posts"
                       />
                     </TableHead>
-                    <TableHead>Post</TableHead>
+                    <TableHead>Content</TableHead>
+                    <TableHead>Published</TableHead>
                     <TableHead>Author</TableHead>
                     <TableHead>Engagement</TableHead>
+                    <TableHead>Scraped</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Added</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -411,48 +549,117 @@ export default function PostsPage() {
                           aria-label={`Select post ${post.post_id}`}
                         />
                       </TableCell>
-                      <TableCell>
-                        <a
-                          href={post.post_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 font-medium"
-                        >
-                          {post.post_id}
-                        </a>
+                      <TableCell className="max-w-xs">
+                        <div className="flex items-center gap-2">
+                          <a
+                            href={post.post_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 font-medium text-sm flex-shrink-0"
+                          >
+                            Post {post.post_id}
+                          </a>
+                          {post.post_text && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-5 px-2 text-xs flex-shrink-0"
+                              onClick={() => {
+                                setPreviewPost(post)
+                                setShowPreviewDialog(true)
+                              }}
+                            >
+                              Preview
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
-                        <span className="text-sm text-gray-600 truncate">
+                        <div className="text-sm text-gray-600">
+                          {post.posted_at_iso 
+                            ? new Date(post.posted_at_iso).toLocaleDateString()
+                            : 'Unknown'
+                          }
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-gray-600">
                           {post.author_name || 'Unknown'}
                         </span>
                       </TableCell>
                       <TableCell>
-                        <div className="flex gap-3 text-xs text-gray-500">
-                          <span>👍 {post.num_likes || 0}</span>
-                          <span>💬 {post.num_comments || 0}</span>
-                          <span>🔄 {post.num_shares || 0}</span>
+                        <div className="flex gap-3 text-sm">
+                          <span className="flex items-center gap-1">
+                            👍 <span className="font-medium">{post.num_likes || 0}</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            💬 <span className="font-medium">{post.num_comments || 0}</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            🔄 <span className="font-medium">{post.num_shares || 0}</span>
+                          </span>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        {(post.reactions_count || post.comments_count) ? (
+                          <div className="flex gap-3 text-sm">
+                            <span className="flex items-center gap-1">
+                              👍 
+                              {post.reactions_count ? (
+                                <button
+                                  onClick={() => loadEngagementData(post, 'reactions')}
+                                  className="font-medium text-green-600 hover:text-green-800 hover:underline cursor-pointer"
+                                  disabled={loadingEngagement}
+                                >
+                                  {post.reactions_count}
+                                </button>
+                              ) : (
+                                <span className="font-medium text-green-600">0</span>
+                              )}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              💬 
+                              {post.comments_count ? (
+                                <button
+                                  onClick={() => loadEngagementData(post, 'comments')}
+                                  className="font-medium text-green-600 hover:text-green-800 hover:underline cursor-pointer"
+                                  disabled={loadingEngagement}
+                                >
+                                  {post.comments_count}
+                                </button>
+                              ) : (
+                                <span className="font-medium text-green-600">0</span>
+                              )}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400">None</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-1">
                           <Badge 
+                            variant={post.posted_at_iso ? "default" : "secondary"} 
+                            className="text-xs px-2 py-0"
+                            title={post.posted_at_iso ? "Metadata fetched" : "Metadata not fetched"}
+                          >
+                            {post.posted_at_iso ? '✓' : '○'} M
+                          </Badge>
+                          <Badge 
                             variant={post.last_reactions_scrape ? "default" : "secondary"} 
                             className="text-xs px-2 py-0"
+                            title={post.last_reactions_scrape ? "Reactions scraped" : "Reactions not scraped"}
                           >
                             {post.last_reactions_scrape ? '✓' : '○'} R
                           </Badge>
                           <Badge 
                             variant={post.last_comments_scrape ? "default" : "secondary"} 
                             className="text-xs px-2 py-0"
+                            title={post.last_comments_scrape ? "Comments scraped" : "Comments not scraped"}
                           >
                             {post.last_comments_scrape ? '✓' : '○'} C
                           </Badge>
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="text-xs text-gray-500">
-                          {new Date(post.created_at).toLocaleDateString()}
-                        </span>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -471,6 +678,9 @@ export default function PostsPage() {
                 {confirmAction === 'delete' && 
                   `Are you sure you want to delete ${selectedPosts.size} post${selectedPosts.size !== 1 ? 's' : ''}?`
                 }
+                {confirmAction === 'metadata' && 
+                  `Do you want to fetch metadata for ${selectedPosts.size === posts.length ? 'all posts' : `${selectedPosts.size} selected post${selectedPosts.size !== 1 ? 's' : ''}`}? This will get post content, author info, and publication date.`
+                }
                 {confirmAction === 'reactions' && 
                   `Do you want to scrape reactions for ${selectedPosts.size === posts.length ? 'all posts' : `${selectedPosts.size} selected post${selectedPosts.size !== 1 ? 's' : ''}`}?`
                 }
@@ -483,15 +693,192 @@ export default function PostsPage() {
               <Button
                 variant="outline"
                 onClick={() => setShowConfirmDialog(false)}
+                disabled={isSaving}
               >
                 Cancel
               </Button>
               <Button
                 onClick={confirmActionHandler}
                 variant={confirmAction === 'delete' ? 'destructive' : 'default'}
+                disabled={isSaving}
               >
-                {confirmAction === 'delete' ? 'Delete' : 'Confirm'}
+                {isSaving ? (
+                  confirmAction === 'metadata' ? 'Fetching Metadata...' :
+                  confirmAction === 'reactions' ? 'Scraping Reactions...' :
+                  confirmAction === 'comments' ? 'Scraping Comments...' :
+                  'Deleting...'
+                ) : (
+                  confirmAction === 'delete' ? 'Delete' : 'Confirm'
+                )}
               </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Post Preview Dialog */}
+        <Dialog open={showPreviewDialog} onOpenChange={setShowPreviewDialog}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Post Preview</DialogTitle>
+              <DialogDescription>
+                View the full content and details of this LinkedIn post.
+              </DialogDescription>
+            </DialogHeader>
+            
+            {/* Author Info */}
+            {previewPost?.author_name && (
+              <div className="flex items-center gap-2 pb-4 border-b">
+                <span className="text-sm text-gray-600">By</span>
+                {previewPost.author_profile_url ? (
+                  <a
+                    href={previewPost.author_profile_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:text-blue-800 font-medium hover:underline"
+                  >
+                    {previewPost.author_name}
+                  </a>
+                ) : (
+                  <span className="font-medium">{previewPost.author_name}</span>
+                )}
+                {previewPost.posted_at_iso && (
+                  <span className="text-gray-500">
+                    • {new Date(previewPost.posted_at_iso).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="space-y-4">
+              {previewPost?.post_text && (
+                <div>
+                  <h4 className="font-medium text-sm text-gray-700 mb-2">Content</h4>
+                  <div className="bg-gray-50 p-3 rounded-lg">
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed">
+                      {previewPost.post_text}
+                    </p>
+                  </div>
+                </div>
+              )}
+              
+              {previewPost && (
+                <div>
+                  <h4 className="font-medium text-sm text-gray-700 mb-2">LinkedIn Engagement Stats</h4>
+                  <div className="flex gap-4 text-sm mb-3">
+                    <span className="flex items-center gap-1">
+                      👍 <span className="font-medium">{previewPost.num_likes || 0}</span> reactions
+                    </span>
+                    <span className="flex items-center gap-1">
+                      💬 <span className="font-medium">{previewPost.num_comments || 0}</span> comments
+                    </span>
+                    <span className="flex items-center gap-1">
+                      🔄 <span className="font-medium">{previewPost.num_shares || 0}</span> shares
+                    </span>
+                  </div>
+                  
+                  {(previewPost.reactions_count || previewPost.comments_count) && (
+                    <>
+                      <h4 className="font-medium text-sm text-gray-700 mb-2">Scraped Data</h4>
+                      <div className="flex gap-4 text-sm">
+                        <span className="flex items-center gap-1">
+                          👍 <span className="font-medium text-green-600">{previewPost.reactions_count || 0}</span> reactions scraped
+                        </span>
+                        <span className="flex items-center gap-1">
+                          💬 <span className="font-medium text-green-600">{previewPost.comments_count || 0}</span> comments scraped
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-4">
+                <Button asChild variant="outline">
+                  <a
+                    href={previewPost?.post_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    View on LinkedIn
+                  </a>
+                </Button>
+                <Button 
+                  variant="outline"
+                  onClick={() => setShowPreviewDialog(false)}
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Engagement Details Dialog */}
+        <Dialog open={showEngagementDialog} onOpenChange={setShowEngagementDialog}>
+          <DialogContent className="max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <DialogHeader>
+              <DialogTitle>
+                {engagementData?.type === 'reactions' ? 'People Who Reacted' : 'People Who Commented'}
+              </DialogTitle>
+              <DialogDescription>
+                {engagementData?.profiles.length || 0} {engagementData?.type} on Post {engagementData?.post?.post_id}
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-3">
+              {loadingEngagement ? (
+                <div className="text-center py-8">
+                  <div className="text-sm text-gray-500">Loading...</div>
+                </div>
+              ) : engagementData?.profiles.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="text-sm text-gray-500">No {engagementData.type} found</div>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                  {engagementData?.profiles.map((profile: any, index: number) => (
+                    <div key={profile.profiles.id || index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                      <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
+                        {profile.profiles.name?.charAt(0)?.toUpperCase() || '?'}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          {profile.profiles.profile_url ? (
+                            <a
+                              href={profile.profiles.profile_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-blue-600 hover:text-blue-800 hover:underline text-sm truncate"
+                            >
+                              {profile.profiles.name || 'Unknown'}
+                            </a>
+                          ) : (
+                            <span className="font-medium text-sm truncate">{profile.profiles.name || 'Unknown'}</span>
+                          )}
+                          {engagementData.type === 'reactions' && profile.reaction_type && (
+                            <Badge variant="outline" className="text-xs flex-shrink-0">
+                              {profile.reaction_type}
+                            </Badge>
+                          )}
+                        </div>
+                        {profile.profiles.headline && (
+                          <div className="text-xs text-gray-500 line-clamp-1">
+                            {profile.profiles.headline}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex justify-end pt-4 border-t">
+                <Button 
+                  variant="outline"
+                  onClick={() => setShowEngagementDialog(false)}
+                >
+                  Close
+                </Button>
+              </div>
             </div>
           </DialogContent>
         </Dialog>
