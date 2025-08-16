@@ -14,7 +14,291 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      comments: {
+        Row: {
+          comment_id: string
+          comment_text: string | null
+          comment_url: string | null
+          commenter_profile_id: string
+          id: string
+          is_edited: boolean | null
+          is_pinned: boolean | null
+          page_number: number | null
+          post_id: string
+          posted_at_date: string | null
+          posted_at_timestamp: number | null
+          reactions_breakdown: Json | null
+          replies_count: number | null
+          scraped_at: string | null
+          total_reactions: number | null
+          user_id: string
+        }
+        Insert: {
+          comment_id: string
+          comment_text?: string | null
+          comment_url?: string | null
+          commenter_profile_id: string
+          id?: string
+          is_edited?: boolean | null
+          is_pinned?: boolean | null
+          page_number?: number | null
+          post_id: string
+          posted_at_date?: string | null
+          posted_at_timestamp?: number | null
+          reactions_breakdown?: Json | null
+          replies_count?: number | null
+          scraped_at?: string | null
+          total_reactions?: number | null
+          user_id: string
+        }
+        Update: {
+          comment_id?: string
+          comment_text?: string | null
+          comment_url?: string | null
+          commenter_profile_id?: string
+          id?: string
+          is_edited?: boolean | null
+          is_pinned?: boolean | null
+          page_number?: number | null
+          post_id?: string
+          posted_at_date?: string | null
+          posted_at_timestamp?: number | null
+          reactions_breakdown?: Json | null
+          replies_count?: number | null
+          scraped_at?: string | null
+          total_reactions?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comments_commenter_profile_id_fkey"
+            columns: ["commenter_profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comments_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      posts: {
+        Row: {
+          author_name: string | null
+          author_profile_id: string | null
+          author_profile_url: string | null
+          created_at: string | null
+          id: string
+          last_comments_scrape: string | null
+          last_reactions_scrape: string | null
+          num_comments: number | null
+          num_likes: number | null
+          num_shares: number | null
+          post_id: string | null
+          post_text: string | null
+          post_type: string | null
+          post_url: string
+          post_urn: string | null
+          posted_at_iso: string | null
+          posted_at_timestamp: number | null
+          scraped_at: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          author_name?: string | null
+          author_profile_id?: string | null
+          author_profile_url?: string | null
+          created_at?: string | null
+          id?: string
+          last_comments_scrape?: string | null
+          last_reactions_scrape?: string | null
+          num_comments?: number | null
+          num_likes?: number | null
+          num_shares?: number | null
+          post_id?: string | null
+          post_text?: string | null
+          post_type?: string | null
+          post_url: string
+          post_urn?: string | null
+          posted_at_iso?: string | null
+          posted_at_timestamp?: number | null
+          scraped_at?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          author_name?: string | null
+          author_profile_id?: string | null
+          author_profile_url?: string | null
+          created_at?: string | null
+          id?: string
+          last_comments_scrape?: string | null
+          last_reactions_scrape?: string | null
+          num_comments?: number | null
+          num_likes?: number | null
+          num_shares?: number | null
+          post_id?: string | null
+          post_text?: string | null
+          post_type?: string | null
+          post_url?: string
+          post_urn?: string | null
+          posted_at_iso?: string | null
+          posted_at_timestamp?: number | null
+          scraped_at?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          first_seen: string | null
+          headline: string | null
+          id: string
+          last_updated: string | null
+          name: string | null
+          profile_pictures: Json | null
+          profile_url: string | null
+          urn: string
+        }
+        Insert: {
+          first_seen?: string | null
+          headline?: string | null
+          id?: string
+          last_updated?: string | null
+          name?: string | null
+          profile_pictures?: Json | null
+          profile_url?: string | null
+          urn: string
+        }
+        Update: {
+          first_seen?: string | null
+          headline?: string | null
+          id?: string
+          last_updated?: string | null
+          name?: string | null
+          profile_pictures?: Json | null
+          profile_url?: string | null
+          urn?: string
+        }
+        Relationships: []
+      }
+      reactions: {
+        Row: {
+          id: string
+          page_number: number | null
+          post_id: string
+          reaction_type: string
+          reactor_profile_id: string
+          scraped_at: string | null
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          page_number?: number | null
+          post_id: string
+          reaction_type: string
+          reactor_profile_id: string
+          scraped_at?: string | null
+          user_id: string
+        }
+        Update: {
+          id?: string
+          page_number?: number | null
+          post_id?: string
+          reaction_type?: string
+          reactor_profile_id?: string
+          scraped_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reactions_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "posts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reactions_reactor_profile_id_fkey"
+            columns: ["reactor_profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scrape_jobs: {
+        Row: {
+          apify_run_id: string | null
+          completed_at: string | null
+          created_at: string | null
+          error_message: string | null
+          id: string
+          job_type: string
+          post_ids: string[] | null
+          started_at: string | null
+          status: string
+          total_items_scraped: number | null
+          user_id: string
+        }
+        Insert: {
+          apify_run_id?: string | null
+          completed_at?: string | null
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          job_type: string
+          post_ids?: string[] | null
+          started_at?: string | null
+          status?: string
+          total_items_scraped?: number | null
+          user_id: string
+        }
+        Update: {
+          apify_run_id?: string | null
+          completed_at?: string | null
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          job_type?: string
+          post_ids?: string[] | null
+          started_at?: string | null
+          status?: string
+          total_items_scraped?: number | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_settings: {
+        Row: {
+          apify_api_key: string
+          created_at: string | null
+          id: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          apify_api_key: string
+          created_at?: string | null
+          id?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          apify_api_key?: string
+          created_at?: string | null
+          id?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
