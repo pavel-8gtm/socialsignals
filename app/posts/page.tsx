@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { ProgressOverlay, useProgressTracking, type ProgressStep } from '@/components/ui/progress-overlay'
 import { ChevronDownIcon } from 'lucide-react'
 import type { Database } from '@/lib/types/database.types'
 
@@ -48,7 +49,91 @@ export default function PostsPage() {
   const [showProfileDialog, setShowProfileDialog] = useState(false)
   const [isScrapingProfile, setIsScrapingProfile] = useState(false)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  
+  // Progress tracking
+  const progressTracking = useProgressTracking()
   const [confirmAction, setConfirmAction] = useState<'metadata' | 'reactions' | 'comments' | 'delete' | null>(null)
+  
+  // Helper function to poll progress
+  const pollProgress = async (progressId: string, endpoint: string, skipLoadPosts = false) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`${endpoint}?progressId=${progressId}`)
+        const data = await response.json()
+        
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to get progress')
+        }
+        
+        progressTracking.updateProgress(data.progress, data.processedPosts || data.processedItems)
+        
+        // Update steps based on status
+        const steps: ProgressStep[] = [
+          {
+            id: 'init',
+            label: 'Initializing...',
+            status: data.progress > 0 ? 'completed' : 'pending'
+          },
+          {
+            id: 'scraping',
+            label: data.status === 'scraping' ? 'Scraping data...' : 'Scrape data',
+            status: data.status === 'scraping' ? 'running' : data.progress > 20 ? 'completed' : 'pending',
+            details: data.currentStep
+          },
+          {
+            id: 'processing',
+            label: data.status === 'processing' ? 'Processing results...' : 'Process results',
+            status: data.status === 'processing' ? 'running' : data.progress > 70 ? 'completed' : 'pending'
+          },
+          {
+            id: 'saving',
+            label: data.status === 'saving' ? 'Saving to database...' : 'Save to database',
+            status: data.status === 'saving' ? 'running' : data.progress > 90 ? 'completed' : 'pending'
+          }
+        ]
+        
+        if (data.status === 'error') {
+          steps.forEach(step => {
+            if (step.status === 'running') {
+              step.status = 'error'
+              step.errorMessage = data.error
+            }
+          })
+        }
+        
+        // Update steps in progress tracking
+        steps.forEach(step => {
+          progressTracking.updateStep(step.id, step)
+        })
+        
+        if (data.status === 'completed' || data.status === 'error') {
+          clearInterval(pollInterval)
+          progressTracking.completeProgress()
+          
+          if (data.status === 'completed') {
+            setSuccess(data.result?.message || 'Operation completed successfully')
+            if (!skipLoadPosts) {
+              loadPosts() // Reload posts
+            }
+          } else {
+            setError(data.error || 'Operation failed')
+          }
+        }
+      } catch (error) {
+        clearInterval(pollInterval)
+        progressTracking.updateStep('scraping', {
+          id: 'scraping',
+          label: 'Error occurred',
+          status: 'error',
+          errorMessage: error instanceof Error ? error.message : 'Unknown error'
+        })
+        progressTracking.completeProgress()
+        setError(error instanceof Error ? error.message : 'Failed to get progress')
+      }
+    }, 1000) // Poll every second
+    
+    return pollInterval
+  }
   const [previewPost, setPreviewPost] = useState<Post | null>(null)
   const [showPreviewDialog, setShowPreviewDialog] = useState(false)
   const [showEngagementDialog, setShowEngagementDialog] = useState(false)
@@ -217,31 +302,134 @@ export default function PostsPage() {
     
     try {
       const postIds = Array.from(selectedPosts)
+      const totalPosts = selectedPosts.size
 
-      // Run reactions and comments scraping in parallel for much faster performance
-      const [reactionsResult, commentsResult] = await Promise.allSettled([
-        fetch('/api/scrape/reactions', {
+      // Start progress tracking
+      const initialSteps: ProgressStep[] = [
+        { id: 'init', label: 'Initializing...', status: 'pending' },
+        { id: 'reactions', label: 'Scrape reactions', status: 'pending' },
+        { id: 'comments', label: 'Scrape comments', status: 'pending' },
+        { id: 'saving', label: 'Finalizing results', status: 'pending' }
+      ]
+      
+      progressTracking.startProgress('Scraping Reactions & Comments', initialSteps, totalPosts)
+      progressTracking.updateStep('init', { id: 'init', label: 'Starting scrapers...', status: 'running' })
+
+      // Start both progress-enabled scrapers in parallel
+      const [reactionsResponse, commentsResponse] = await Promise.allSettled([
+        fetch('/api/scrape/reactions-progress', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ postIds }),
         }),
-        fetch('/api/scrape/comments', {
+        fetch('/api/scrape/comments-progress', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ postIds }),
         })
       ])
 
-      // Check results
-      const reactionsSuccess = reactionsResult.status === 'fulfilled' && reactionsResult.value.ok
-      const commentsSuccess = commentsResult.status === 'fulfilled' && commentsResult.value.ok
+      progressTracking.updateStep('init', { id: 'init', label: 'Scrapers started', status: 'completed' })
+      progressTracking.updateProgress(20)
+
+      // Get progress IDs
+      let reactionsProgressId = null
+      let commentsProgressId = null
+
+      if (reactionsResponse.status === 'fulfilled' && reactionsResponse.value.ok) {
+        const result = await reactionsResponse.value.json()
+        reactionsProgressId = result.progressId
+        progressTracking.updateStep('reactions', { id: 'reactions', label: 'Scraping reactions...', status: 'running' })
+      } else {
+        progressTracking.updateStep('reactions', { id: 'reactions', label: 'Failed to start reactions scraper', status: 'error' })
+      }
+
+      if (commentsResponse.status === 'fulfilled' && commentsResponse.value.ok) {
+        const result = await commentsResponse.value.json()
+        commentsProgressId = result.progressId
+        progressTracking.updateStep('comments', { id: 'comments', label: 'Scraping comments...', status: 'running' })
+      } else {
+        progressTracking.updateStep('comments', { id: 'comments', label: 'Failed to start comments scraper', status: 'error' })
+      }
+
+      // Poll both progress endpoints simultaneously
+      const progressPromises = []
+      if (reactionsProgressId) {
+        progressPromises.push(
+          new Promise((resolve) => {
+            const pollReactions = setInterval(async () => {
+              try {
+                const response = await fetch(`/api/scrape/reactions-progress?progressId=${reactionsProgressId}`)
+                const data = await response.json()
+                
+                if (data.status === 'completed') {
+                  progressTracking.updateStep('reactions', { id: 'reactions', label: `Reactions completed (${data.totalReactions || 0} found)`, status: 'completed' })
+                  clearInterval(pollReactions)
+                  resolve(data)
+                } else if (data.status === 'error') {
+                  progressTracking.updateStep('reactions', { id: 'reactions', label: 'Reactions failed', status: 'error', errorMessage: data.error })
+                  clearInterval(pollReactions)
+                  resolve(data)
+                }
+              } catch (error) {
+                progressTracking.updateStep('reactions', { id: 'reactions', label: 'Reactions failed', status: 'error', errorMessage: 'Connection error' })
+                clearInterval(pollReactions)
+                resolve({ status: 'error', error: 'Connection error' })
+              }
+            }, 1000)
+          })
+        )
+      }
+
+      if (commentsProgressId) {
+        progressPromises.push(
+          new Promise((resolve) => {
+            const pollComments = setInterval(async () => {
+              try {
+                const response = await fetch(`/api/scrape/comments-progress?progressId=${commentsProgressId}`)
+                const data = await response.json()
+                
+                if (data.status === 'completed') {
+                  progressTracking.updateStep('comments', { id: 'comments', label: `Comments completed (${data.totalComments || 0} found)`, status: 'completed' })
+                  clearInterval(pollComments)
+                  resolve(data)
+                } else if (data.status === 'error') {
+                  progressTracking.updateStep('comments', { id: 'comments', label: 'Comments failed', status: 'error', errorMessage: data.error })
+                  clearInterval(pollComments)
+                  resolve(data)
+                }
+              } catch (error) {
+                progressTracking.updateStep('comments', { id: 'comments', label: 'Comments failed', status: 'error', errorMessage: 'Connection error' })
+                clearInterval(pollComments)
+                resolve({ status: 'error', error: 'Connection error' })
+              }
+            }, 1000)
+          })
+        )
+      }
+
+      // Wait for both to complete
+      const results = await Promise.all(progressPromises)
+      
+      progressTracking.updateStep('saving', { id: 'saving', label: 'Finalizing...', status: 'running' })
+      progressTracking.updateProgress(90)
 
       // Clear engagement flags for successfully scraped posts
       await clearEngagementFlagsForPosts(postIds)
 
+      // Determine success/failure
+      const reactionsSuccess = results.find(r => r && 'totalReactions' in r)?.status === 'completed'
+      const commentsSuccess = results.find(r => r && 'totalComments' in r)?.status === 'completed'
+
+      progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
+      progressTracking.updateProgress(100)
+      progressTracking.completeProgress()
+
       // Set appropriate success/error message
       if (reactionsSuccess && commentsSuccess) {
-        setSuccess(`Successfully scraped both reactions and comments for ${selectedPosts.size} posts (ran in parallel)`)
+        const reactionsData = results.find(r => r && 'totalReactions' in r)
+        const commentsData = results.find(r => r && 'totalComments' in r)
+        setSuccess(`Successfully scraped both reactions (${reactionsData?.totalReactions || 0}) and comments (${commentsData?.totalComments || 0}) for ${selectedPosts.size} posts`)
       } else if (reactionsSuccess || commentsSuccess) {
         const scraped = reactionsSuccess ? 'reactions' : 'comments'
         const failed = reactionsSuccess ? 'comments' : 'reactions'
@@ -255,6 +443,8 @@ export default function PostsPage() {
       
     } catch (error) {
       console.error('Error scraping engagements:', error)
+      progressTracking.updateStep('saving', { id: 'saving', label: 'Error occurred', status: 'error', errorMessage: error instanceof Error ? error.message : 'Unknown error' })
+      progressTracking.completeProgress()
       setError('Failed to scrape engagements')
     } finally {
       setIsSaving(false)
@@ -326,8 +516,25 @@ export default function PostsPage() {
         
         setEngagementData({ post, type, profiles: data || [] })
       } else {
-        // TODO: Implement comments loading when comments scraping is ready
-        setEngagementData({ post, type, profiles: [] })
+        const { data, error } = await supabase
+          .from('comments')
+          .select(`
+            comment_text,
+            posted_at_date,
+            scraped_at,
+            profiles!inner(
+              id,
+              name,
+              headline,
+              profile_url
+            )
+          `)
+          .eq('post_id', post.id)
+          .order('scraped_at', { ascending: false })
+
+        if (error) throw error
+        
+        setEngagementData({ post, type, profiles: data || [] })
       }
       
       setShowEngagementDialog(true)
@@ -339,40 +546,52 @@ export default function PostsPage() {
   }
 
   async function fetchMetadata() {
-    setIsSaving(true)
-    setError(null)
-    
     try {
-      const response = await fetch('/api/scrape/post-metadata', {
+      const postIds = Array.from(selectedPosts)
+      
+      // Start progress tracking for metadata fetching
+      const initialSteps: ProgressStep[] = [
+        { id: 'init', label: 'Initializing...', status: 'pending' },
+        { id: 'scraping', label: 'Fetch metadata', status: 'pending' },
+        { id: 'processing', label: 'Process results', status: 'pending' },
+        { id: 'saving', label: 'Save to database', status: 'pending' }
+      ]
+      
+      progressTracking.startProgress('Fetching Post Metadata', initialSteps, postIds.length)
+
+      // Start the progress-enabled metadata fetching
+      const response = await fetch('/api/scrape/post-metadata-progress', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          postIds: Array.from(selectedPosts),
+          postIds: postIds,
         }),
       })
 
       const result = await response.json()
 
       if (!response.ok) {
+        progressTracking.updateStep('init', {
+          id: 'init',
+          label: 'Failed to start',
+          status: 'error',
+          errorMessage: result.error || 'Failed to fetch metadata'
+        })
+        progressTracking.completeProgress()
         throw new Error(result.error || 'Failed to fetch metadata')
       }
 
-      let successMessage = `Successfully fetched metadata for ${result.totalProcessed} post${result.totalProcessed !== 1 ? 's' : ''}`
+      // Start polling for progress
+      await pollProgress(result.progressId, '/api/scrape/post-metadata-progress')
       
-      if (result.errors && result.errors.length > 0) {
-        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
-      }
-      
-      setSuccess(successMessage)
-      setSelectedPosts(new Set()) // Clear selection
-      await loadPosts() // Reload posts to show updated data
+      // Clear selection after successful completion
+      setSelectedPosts(new Set())
       
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to fetch metadata')
-    } finally {
-      setIsSaving(false)
+      console.error('Error fetching metadata:', error)
+      setError('Failed to fetch metadata')
     }
   }
 
@@ -392,8 +611,18 @@ export default function PostsPage() {
 
       const postIds = posts.map(p => p.id)
 
-      // Now fetch metadata using the existing API
-      const response = await fetch('/api/scrape/post-metadata', {
+      // Start progress tracking for metadata fetching
+      const initialSteps: ProgressStep[] = [
+        { id: 'init', label: 'Initializing...', status: 'pending' },
+        { id: 'scraping', label: 'Fetch metadata', status: 'pending' },
+        { id: 'processing', label: 'Process results', status: 'pending' },
+        { id: 'saving', label: 'Save to database', status: 'pending' }
+      ]
+      
+      progressTracking.startProgress('Fetching Post Metadata', initialSteps, postIds.length)
+
+      // Start the progress-enabled metadata fetching
+      const response = await fetch('/api/scrape/post-metadata-progress', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -406,17 +635,18 @@ export default function PostsPage() {
       const result = await response.json()
 
       if (!response.ok) {
+        progressTracking.updateStep('init', {
+          id: 'init',
+          label: 'Failed to start',
+          status: 'error',
+          errorMessage: result.error || 'Failed to fetch metadata'
+        })
+        progressTracking.completeProgress()
         throw new Error(result.error || 'Failed to fetch metadata')
       }
 
-      let successMessage = `Successfully fetched metadata for ${result.totalProcessed} newly added post${result.totalProcessed !== 1 ? 's' : ''}`
-      
-      if (result.errors && result.errors.length > 0) {
-        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
-      }
-      
-      setSuccess(successMessage)
-      await loadPosts() // Reload posts to show updated metadata
+      // Start polling for progress
+      await pollProgress(result.progressId, '/api/scrape/post-metadata-progress')
       
     } catch (error) {
       console.error('Error fetching metadata for new posts:', error)
@@ -562,7 +792,18 @@ export default function PostsPage() {
         }
       }
 
-      const response = await fetch('/api/scrape/profile-posts', {
+      // Start progress tracking
+      const initialSteps: ProgressStep[] = [
+        { id: 'init', label: 'Initializing...', status: 'pending' },
+        { id: 'scraping', label: 'Scrape data', status: 'pending' },
+        { id: 'processing', label: 'Process results', status: 'pending' },
+        { id: 'saving', label: 'Save to database', status: 'pending' }
+      ]
+      
+      progressTracking.startProgress('Scraping Posts from LinkedIn Profile', initialSteps)
+
+      // Start the progress-enabled scraping
+      const response = await fetch('/api/scrape/profile-posts-progress', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -573,16 +814,31 @@ export default function PostsPage() {
       const result = await response.json()
 
       if (!response.ok) {
+        progressTracking.updateStep('init', {
+          id: 'init',
+          label: 'Failed to start',
+          status: 'error',
+          errorMessage: result.error || 'Failed to scrape profile posts'
+        })
+        progressTracking.completeProgress()
         setError(result.error || 'Failed to scrape profile posts')
         return
       }
 
-      setSuccess(result.message)
+      // Start polling for progress
+      await pollProgress(result.progressId, '/api/scrape/profile-posts-progress')
+      
       profileForm.reset()
       setShowProfileDialog(false)
-      await loadPosts() // Reload the posts list
     } catch (error) {
       console.error('Profile scraping error:', error)
+      progressTracking.updateStep('init', {
+        id: 'init',
+        label: 'Error occurred',
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Unknown error'
+      })
+      progressTracking.completeProgress()
       setError('Failed to scrape profile posts')
     } finally {
       setIsScrapingProfile(false)
@@ -1439,6 +1695,19 @@ export default function PostsPage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Progress Overlay */}
+        <ProgressOverlay
+          isOpen={progressTracking.isOpen}
+          onClose={progressTracking.closeProgress}
+          title={progressTracking.title}
+          steps={progressTracking.steps}
+          overallProgress={progressTracking.overallProgress}
+          totalItems={progressTracking.totalItems}
+          processedItems={progressTracking.processedItems}
+          isCompleted={progressTracking.isCompleted}
+          canCancel={false}
+        />
       </div>
     </div>
   )

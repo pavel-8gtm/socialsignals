@@ -233,6 +233,37 @@ export class ApifyService {
   }
 
   /**
+   * Scrape reactions for multiple posts concurrently (much faster!)
+   */
+  async scrapeAllPostReactionsConcurrent(postUrls: string[], concurrencyLimit: number = 32): Promise<ApifyReactionData[]> {
+    const allReactions: ApifyReactionData[] = []
+    
+    // Process posts in batches to respect concurrency limits
+    for (let i = 0; i < postUrls.length; i += concurrencyLimit) {
+      const batch = postUrls.slice(i, i + concurrencyLimit)
+      
+      const batchPromises = batch.map(async (postUrl) => {
+        try {
+          return await this.scrapeAllPostReactions(postUrl)
+        } catch (error) {
+          console.error(`Error scraping reactions for ${postUrl}:`, error)
+          return []
+        }
+      })
+      
+      const batchResults = await Promise.allSettled(batchPromises)
+      
+      batchResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          allReactions.push(...result.value)
+        }
+      })
+    }
+    
+    return allReactions
+  }
+
+  /**
    * Scrape post details and metadata
    */
   async scrapePostDetail(postUrl: string): Promise<ApifyPostDetailData> {
