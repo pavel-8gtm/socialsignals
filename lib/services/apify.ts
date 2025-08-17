@@ -116,7 +116,7 @@ export interface ApifyCommentData {
 }
 
 export interface ScrapeCommentsParams {
-  postIds: string[]
+  postUrls: string[]
   pageNumber?: number
 }
 
@@ -309,7 +309,7 @@ export class ApifyService {
    */
   async scrapePostComments(params: ScrapeCommentsParams): Promise<ApifyCommentData[]> {
     const input = {
-      postIds: params.postIds,
+      postUrls: params.postUrls,
       page_number: params.pageNumber || 1
     }
 
@@ -343,7 +343,7 @@ export class ApifyService {
     while (hasMorePages) {
       try {
         const response = await this.scrapePostComments({
-          postIds: postUrls,
+          postUrls: postUrls,
           pageNumber
         })
 
