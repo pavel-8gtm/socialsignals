@@ -451,9 +451,9 @@ export default function ProfilesPage() {
     return (
       <div className="container mx-auto py-8 px-4">
         <div className="max-w-2xl mx-auto text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">
-            Please log in to view profiles
-          </h1>
+          <div className="animate-pulse">
+            <div className="h-8 bg-gray-200 rounded w-48 mx-auto"></div>
+          </div>
         </div>
       </div>
     )
