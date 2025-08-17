@@ -1016,7 +1016,7 @@ export default function PostsPage() {
                                   </Button>
                                 </FormControl>
                               </PopoverTrigger>
-                              <PopoverContent className="w-auto p-0" align="start">
+                              <PopoverContent className="w-auto p-0" align="start" side="bottom" sideOffset={4}>
                                 <Calendar
                                   mode="single"
                                   selected={field.value ? new Date(field.value) : undefined}
@@ -1033,15 +1033,17 @@ export default function PostsPage() {
                                   toDate={new Date()} // Don't show dates beyond today
                                   fromDate={new Date("1900-01-01")} // Don't show dates before 1900
                                   showOutsideDays={false} // Hide days from other months
+                                  captionLayout="dropdown-buttons" // Compact month/year selection
+                                  className="p-2"
                                   initialFocus
                                 />
                                 {field.value && (
-                                  <div className="p-3 border-t">
+                                  <div className="p-2 border-t">
                                     <Button
                                       variant="ghost"
                                       size="sm"
                                       onClick={() => field.onChange("")}
-                                      className="w-full"
+                                      className="w-full h-8 text-xs"
                                     >
                                       Clear date
                                     </Button>
