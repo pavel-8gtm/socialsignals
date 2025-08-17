@@ -18,7 +18,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ProgressOverlay, useProgressTracking, type ProgressStep } from '@/components/ui/progress-overlay'
-import { ChevronDownIcon } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Calendar } from '@/components/ui/calendar'
+import { ChevronDownIcon, CalendarIcon } from 'lucide-react'
+import { format } from 'date-fns'
 import type { Database } from '@/lib/types/database.types'
 
 type Post = Database['public']['Tables']['posts']['Row'] & {
@@ -990,19 +993,59 @@ export default function PostsPage() {
                       )}
                     />
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <FormField
                         control={profileForm.control}
                         name="scrapeUntilDate"
                         render={({ field }) => (
-                          <FormItem>
+                          <FormItem className="flex flex-col">
                             <FormLabel>Scrape Until Date (Optional)</FormLabel>
-                            <FormControl>
-                              <Input
-                                type="date"
-                                {...field}
-                              />
-                            </FormControl>
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <FormControl>
+                                  <Button
+                                    variant="outline"
+                                    className={`w-full pl-3 text-left font-normal ${!field.value && "text-muted-foreground"}`}
+                                  >
+                                    {field.value ? (
+                                      format(new Date(field.value), "PPP")
+                                    ) : (
+                                      <span>Pick a date</span>
+                                    )}
+                                    <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                  </Button>
+                                </FormControl>
+                              </PopoverTrigger>
+                              <PopoverContent className="w-auto p-0" align="start">
+                                <Calendar
+                                  mode="single"
+                                  selected={field.value ? new Date(field.value) : undefined}
+                                  onSelect={(date) => {
+                                    if (date) {
+                                      field.onChange(format(date, "yyyy-MM-dd"))
+                                    } else {
+                                      field.onChange("")
+                                    }
+                                  }}
+                                  disabled={(date) =>
+                                    date > new Date() || date < new Date("1900-01-01")
+                                  }
+                                  initialFocus
+                                />
+                                {field.value && (
+                                  <div className="p-3 border-t">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => field.onChange("")}
+                                      className="w-full"
+                                    >
+                                      Clear date
+                                    </Button>
+                                  </div>
+                                )}
+                              </PopoverContent>
+                            </Popover>
                             <FormDescription>
                               Stop scraping posts older than this date
                             </FormDescription>
