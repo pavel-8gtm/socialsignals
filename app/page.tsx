@@ -1,17 +1,9 @@
 import Link from "next/link"
-import { redirect } from "next/navigation"
-import { createClient } from "@/lib/supabase/server"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 
-export default async function Home() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  // If user is authenticated, redirect to posts page
-  if (user) {
-    redirect('/posts')
-  }
+export default function Home() {
+  // Note: Authentication redirect is handled by middleware.ts
   return (
     <div className="container mx-auto py-12 px-4">
       <div className="max-w-4xl mx-auto">

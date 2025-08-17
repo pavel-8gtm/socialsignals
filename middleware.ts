@@ -35,6 +35,13 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  // If authenticated user visits home page, redirect to posts
+  if (user && request.nextUrl.pathname === '/') {
+    const url = request.nextUrl.clone()
+    url.pathname = '/posts'
+    return NextResponse.redirect(url)
+  }
+
   if (
     !user &&
     !request.nextUrl.pathname.startsWith('/login') &&
