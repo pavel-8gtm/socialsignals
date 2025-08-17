@@ -215,6 +215,17 @@ export class ApifyService {
           hasMorePages = false
         } else {
           allReactions.push(...reactions)
+          
+          // Smart pagination: if first page shows total_reactions < 100, no need for more pages
+          if (pageNumber === 1 && reactions.length > 0 && reactions[0]._metadata?.total_reactions) {
+            const totalReactions = reactions[0]._metadata.total_reactions
+            if (totalReactions <= 100) {
+              console.log(`Post has only ${totalReactions} total reactions, stopping pagination`)
+              hasMorePages = false
+              break
+            }
+          }
+          
           pageNumber++
           
           // Safety check to prevent infinite loops
