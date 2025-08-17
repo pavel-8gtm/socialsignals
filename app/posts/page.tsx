@@ -146,6 +146,7 @@ export default function PostsPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [showNewEngagementOnly, setShowNewEngagementOnly] = useState(false)
   const [showUnscrapedOnly, setShowUnscrapedOnly] = useState(false)
+  const [authorFilter, setAuthorFilter] = useState('')
   const supabase = createClient()
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -884,14 +885,23 @@ export default function PostsPage() {
   const filteredAndSortedPosts = React.useMemo(() => {
     // First apply filters
     let filtered = posts
+    
+    // Apply engagement filters
     if (showNewEngagementOnly) {
-      filtered = posts.filter(post => 
+      filtered = filtered.filter(post => 
         post.engagement_needs_scraping === true && 
         (post.last_reactions_scrape || post.last_comments_scrape)
       )
     } else if (showUnscrapedOnly) {
-      filtered = posts.filter(post => 
+      filtered = filtered.filter(post => 
         !post.last_reactions_scrape || !post.last_comments_scrape
+      )
+    }
+    
+    // Apply author filter
+    if (authorFilter.trim()) {
+      filtered = filtered.filter(post => 
+        post.author_name?.toLowerCase().includes(authorFilter.toLowerCase())
       )
     }
 
@@ -928,7 +938,7 @@ export default function PostsPage() {
     })
 
     return sorted
-  }, [posts, sortBy, sortOrder, showNewEngagementOnly, showUnscrapedOnly])
+  }, [posts, sortBy, sortOrder, showNewEngagementOnly, showUnscrapedOnly, authorFilter])
 
   // Watch for changes in the textarea to validate in real-time
   const watchedUrls = form.watch('postUrls')
@@ -1276,10 +1286,32 @@ export default function PostsPage() {
 
             
             <div className="ml-auto flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Filter by author..."
+                  value={authorFilter}
+                  onChange={(e) => setAuthorFilter(e.target.value)}
+                  className="w-48 h-8 text-sm"
+                />
+                {authorFilter && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setAuthorFilter('')}
+                    className="h-8 px-2 text-xs text-gray-500 hover:text-gray-700"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+              
               <button
                 onClick={() => {
                   setShowUnscrapedOnly(!showUnscrapedOnly)
-                  if (!showUnscrapedOnly) setShowNewEngagementOnly(false) // Clear other filter
+                  if (!showUnscrapedOnly) {
+                    setShowNewEngagementOnly(false) // Clear other filter
+                    setAuthorFilter('') // Clear author filter
+                  }
                 }}
                 className={`text-sm cursor-pointer transition-colors border-b border-dotted ${
                   showUnscrapedOnly 
@@ -1294,7 +1326,10 @@ export default function PostsPage() {
               <button
                 onClick={() => {
                   setShowNewEngagementOnly(!showNewEngagementOnly)
-                  if (!showNewEngagementOnly) setShowUnscrapedOnly(false) // Clear other filter
+                  if (!showNewEngagementOnly) {
+                    setShowUnscrapedOnly(false) // Clear other filter
+                    setAuthorFilter('') // Clear author filter
+                  }
                 }}
                 className={`text-sm cursor-pointer transition-colors border-b border-dotted ${
                   showNewEngagementOnly 
