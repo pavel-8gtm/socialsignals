@@ -1030,6 +1030,9 @@ export default function PostsPage() {
                                   disabled={(date) =>
                                     date > new Date() || date < new Date("1900-01-01")
                                   }
+                                  toDate={new Date()} // Don't show dates beyond today
+                                  fromDate={new Date("1900-01-01")} // Don't show dates before 1900
+                                  showOutsideDays={false} // Hide days from other months
                                   initialFocus
                                 />
                                 {field.value && (
