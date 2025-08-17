@@ -139,7 +139,7 @@ export default function PostsPage() {
   const [showEngagementDialog, setShowEngagementDialog] = useState(false)
   const [engagementData, setEngagementData] = useState<{ post: Post; type: 'reactions' | 'comments'; profiles: any[] } | null>(null)
   const [loadingEngagement, setLoadingEngagement] = useState(false)
-  const [sortBy, setSortBy] = useState<'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | null>(null)
+  const [sortBy, setSortBy] = useState<'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | null>('posted_at')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [showNewEngagementOnly, setShowNewEngagementOnly] = useState(false)
   const [showUnscrapedOnly, setShowUnscrapedOnly] = useState(false)
