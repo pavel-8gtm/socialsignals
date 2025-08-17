@@ -127,7 +127,7 @@ async function processReactionsScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 10,
-      currentStep: 'Starting Apify reactions scraper...',
+      currentStep: 'Starting reactions scraper...',
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -140,7 +140,7 @@ async function processReactionsScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 20,
-      currentStep: `Starting 32 concurrent Apify runs for ${posts.length} posts... (check Apify console for parallel run details)`,
+      currentStep: `Scraping reactions from ${posts.length} posts...`,
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -155,7 +155,7 @@ async function processReactionsScraping(
     progressStore.set(progressId, {
       status: 'processing',
       progress: 60,
-      currentStep: `Concurrent scraping completed! Found ${allReactionsData.length} reactions total. Processing by post...`,
+      currentStep: `Found ${allReactionsData.length} reactions. Processing results...`,
       totalPosts: posts.length,
       processedPosts: 0,
       totalReactions: allReactionsData.length
@@ -196,7 +196,7 @@ async function processReactionsScraping(
         progressStore.set(progressId, {
           status: 'processing',
           progress: baseProgress + 5,
-          currentStep: `Processing ${reactionsData.length} reactions for post ${i + 1} of ${posts.length}...`,
+          currentStep: `Saving ${reactionsData.length} reactions for post ${i + 1} of ${posts.length}...`,
           totalPosts: posts.length,
           processedPosts: i,
           totalReactions: results.reduce((sum, r) => sum + r.reactionsCount, 0) + reactionsData.length

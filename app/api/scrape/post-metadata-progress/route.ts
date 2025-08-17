@@ -121,7 +121,7 @@ async function processMetadataScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 10,
-      currentStep: 'Starting Apify metadata scraper...',
+      currentStep: 'Starting metadata scraper...',
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -139,7 +139,7 @@ async function processMetadataScraping(
       progressStore.set(progressId, {
         status: 'scraping',
         progress: batchProgress,
-        currentStep: `Processing batch ${Math.floor(i / concurrencyLimit) + 1} of ${Math.ceil(posts.length / concurrencyLimit)} (posts ${i + 1}-${Math.min(i + concurrencyLimit, posts.length)})...`,
+        currentStep: `Fetching metadata for posts ${i + 1}-${Math.min(i + concurrencyLimit, posts.length)} of ${posts.length}...`,
         totalPosts: posts.length,
         processedPosts: i
       })

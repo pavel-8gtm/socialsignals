@@ -109,7 +109,7 @@ async function processProfileScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 10,
-      currentStep: 'Starting Apify scraper...'
+      currentStep: 'Starting profile scraper...'
     })
 
     console.log(`Scraping posts from profile: ${profileUrl}`)

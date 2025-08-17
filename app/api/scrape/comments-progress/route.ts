@@ -124,7 +124,7 @@ async function processCommentsScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 10,
-      currentStep: 'Starting Apify comments scraper...',
+      currentStep: 'Starting comments scraper...',
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -138,7 +138,7 @@ async function processCommentsScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 20,
-      currentStep: `Starting batch scraping for ${posts.length} posts... (check Apify console for run details)`,
+      currentStep: `Scraping comments from ${posts.length} posts...`,
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -149,7 +149,7 @@ async function processCommentsScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 25,
-      currentStep: `Apify batch run in progress for ${posts.length} posts... (this may take several minutes)`,
+      currentStep: `Scraping in progress... (this may take several minutes)`,
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -161,7 +161,7 @@ async function processCommentsScraping(
     progressStore.set(progressId, {
       status: 'processing',
       progress: 45,
-      currentStep: `Batch scraping completed! Found ${allCommentsData.length} comments total. Processing...`,
+      currentStep: `Found ${allCommentsData.length} comments. Processing results...`,
       totalPosts: posts.length,
       processedPosts: 0,
       totalComments: allCommentsData.length
@@ -214,7 +214,7 @@ async function processCommentsScraping(
         progressStore.set(progressId, {
           status: 'processing',
           progress: postProgress + 1,
-          currentStep: `Found ${postComments.length} comments for post ${i + 1} of ${posts.length}. Saving...`,
+          currentStep: `Saving ${postComments.length} comments for post ${i + 1} of ${posts.length}...`,
           totalPosts: posts.length,
           processedPosts: i,
           totalComments: allCommentsData.length,
