@@ -456,38 +456,49 @@ export default function PostsPage() {
     setError(null)
     
     try {
-      const response = await fetch('/api/scrape/comments', {
+      const postIds = Array.from(selectedPosts)
+      
+      // Start progress tracking for comments
+      const initialSteps: ProgressStep[] = [
+        { id: 'init', label: 'Initializing...', status: 'pending' },
+        { id: 'scraping', label: 'Scrape comments', status: 'pending' },
+        { id: 'processing', label: 'Process results', status: 'pending' },
+        { id: 'saving', label: 'Save to database', status: 'pending' }
+      ]
+      
+      progressTracking.startProgress('Scraping Comments', initialSteps, postIds.length)
+
+      // Start the progress-enabled comments scraping
+      const response = await fetch('/api/scrape/comments-progress', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          postIds: Array.from(selectedPosts),
-        }),
+        body: JSON.stringify({ postIds }),
       })
 
       const result = await response.json()
 
       if (!response.ok) {
+        progressTracking.updateStep('init', {
+          id: 'init',
+          label: 'Failed to start',
+          status: 'error',
+          errorMessage: result.error || 'Failed to scrape comments'
+        })
+        progressTracking.completeProgress()
         throw new Error(result.error || 'Failed to scrape comments')
       }
 
-      let successMessage = `Successfully scraped ${result.totalScraped} comments from ${result.postsProcessed} post${result.postsProcessed !== 1 ? 's' : ''}`
+      // Start polling for progress
+      await pollProgress(result.progressId, '/api/scrape/comments-progress')
       
-      if (result.errors && result.errors.length > 0) {
-        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
-      }
-      
-      setSuccess(successMessage)
-      
-      // Automatically clear engagement flags for successfully scraped posts
-      await clearEngagementFlagsForPosts(Array.from(selectedPosts))
-      
-      setSelectedPosts(new Set()) // Clear selection
-      await loadPosts() // Reload posts to show updated scrape status
+      // Clear selection after successful completion
+      setSelectedPosts(new Set())
       
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to scrape comments')
+      console.error('Error scraping comments:', error)
+      setError('Failed to scrape comments')
     } finally {
       setIsSaving(false)
     }
@@ -659,38 +670,49 @@ export default function PostsPage() {
     setError(null)
     
     try {
-      const response = await fetch('/api/scrape/reactions', {
+      const postIds = Array.from(selectedPosts)
+      
+      // Start progress tracking for reactions
+      const initialSteps: ProgressStep[] = [
+        { id: 'init', label: 'Initializing...', status: 'pending' },
+        { id: 'scraping', label: 'Scrape reactions', status: 'pending' },
+        { id: 'processing', label: 'Process results', status: 'pending' },
+        { id: 'saving', label: 'Save to database', status: 'pending' }
+      ]
+      
+      progressTracking.startProgress('Scraping Reactions', initialSteps, postIds.length)
+
+      // Start the progress-enabled reactions scraping
+      const response = await fetch('/api/scrape/reactions-progress', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          postIds: Array.from(selectedPosts),
-        }),
+        body: JSON.stringify({ postIds }),
       })
 
       const result = await response.json()
 
       if (!response.ok) {
+        progressTracking.updateStep('init', {
+          id: 'init',
+          label: 'Failed to start',
+          status: 'error',
+          errorMessage: result.error || 'Failed to scrape reactions'
+        })
+        progressTracking.completeProgress()
         throw new Error(result.error || 'Failed to scrape reactions')
       }
 
-      let successMessage = `Successfully scraped ${result.totalScraped} reactions from ${result.postsProcessed} post${result.postsProcessed !== 1 ? 's' : ''}`
+      // Start polling for progress
+      await pollProgress(result.progressId, '/api/scrape/reactions-progress')
       
-      if (result.errors && result.errors.length > 0) {
-        successMessage += `. Warning: ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''} occurred.`
-      }
-      
-      setSuccess(successMessage)
-      
-      // Automatically clear engagement flags for successfully scraped posts
-      await clearEngagementFlagsForPosts(Array.from(selectedPosts))
-      
-      setSelectedPosts(new Set()) // Clear selection
-      await loadPosts() // Reload posts to show updated scrape status
+      // Clear selection after successful completion
+      setSelectedPosts(new Set())
       
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to scrape reactions')
+      console.error('Error scraping reactions:', error)
+      setError('Failed to scrape reactions')
     } finally {
       setIsSaving(false)
     }
