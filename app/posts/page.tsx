@@ -1027,26 +1027,21 @@ export default function PostsPage() {
                                       field.onChange("")
                                     }
                                   }}
-                                  disabled={(date) => date > new Date()}
-                                  toDate={new Date()} // Only show dates up to today
-                                  fromDate={new Date("1900-01-01")} // Start from 1900
-                                  showOutsideDays={false} // Hide outside month days
-                                  captionLayout="dropdown-buttons" // Compact month/year selection
-                                  numberOfMonths={1} // Single month view
-                                  className="p-1"
-                                  classNames={{
-                                    disabled: "hidden", // Completely hide disabled dates
-                                    outside: "hidden" // Hide outside month days
-                                  }}
+                                  disabled={(date) =>
+                                    date > new Date() || date < new Date("1900-01-01")
+                                  }
+                                  toDate={new Date()} // Don't show dates beyond today
+                                  fromDate={new Date("1900-01-01")} // Don't show dates before 1900
+                                  showOutsideDays={false} // Hide days from other months
                                   initialFocus
                                 />
                                 {field.value && (
-                                  <div className="p-2 border-t">
+                                  <div className="p-3 border-t">
                                     <Button
                                       variant="ghost"
                                       size="sm"
                                       onClick={() => field.onChange("")}
-                                      className="w-full h-8 text-xs"
+                                      className="w-full"
                                     >
                                       Clear date
                                     </Button>
