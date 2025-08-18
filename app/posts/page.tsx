@@ -1240,6 +1240,7 @@ export default function PostsPage() {
               <Button
                 onClick={scrapeBothEngagements}
                 disabled={selectedPosts.size === 0 || isSaving}
+                size="sm"
                 className="bg-black hover:bg-gray-800 text-white rounded-r-none border-r border-gray-600"
               >
                 Scrape Engagements ({selectedPosts.size})
@@ -1248,6 +1249,7 @@ export default function PostsPage() {
                 <DropdownMenuTrigger asChild>
                   <Button
                     disabled={selectedPosts.size === 0 || isSaving}
+                    size="sm"
                     className="bg-black hover:bg-gray-800 text-white rounded-l-none px-2 border-l-0"
                   >
                     <ChevronDownIcon className="h-4 w-4" />
@@ -1271,6 +1273,7 @@ export default function PostsPage() {
                   variant="outline"
                   onClick={() => handleAction('metadata')}
                   disabled={selectedPosts.size === 0}
+                  size="sm"
                 >
                   Fetch Post Metadata ({selectedPosts.size})
                 </Button>
@@ -1278,6 +1281,7 @@ export default function PostsPage() {
                   variant="destructive"
                   onClick={() => handleAction('delete')}
                   disabled={selectedPosts.size === 0}
+                  size="sm"
                 >
                   Delete Posts ({selectedPosts.size})
                 </Button>

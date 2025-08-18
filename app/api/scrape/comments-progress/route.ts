@@ -124,59 +124,41 @@ async function processCommentsScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 10,
-      currentStep: 'Starting comments scraper...',
+      currentStep: 'Initializing concurrent scraping jobs...',
       totalPosts: posts.length,
       processedPosts: 0
     })
 
     // Initialize Apify service
     const apifyService = new ApifyService(apifyApiKey)
-
-    // Batch process posts using the existing scrapeAllPostComments method
     const postUrls = posts.map(p => p.post_url)
     
+    // Update: Starting concurrent Apify operations
     progressStore.set(progressId, {
       status: 'scraping',
-      progress: 20,
-      currentStep: `Scraping comments from ${posts.length} posts...`,
+      progress: 15,
+      currentStep: `Starting concurrent scraping for ${posts.length} posts...`,
       totalPosts: posts.length,
       processedPosts: 0
     })
 
-    console.log(`Scraping comments for ${posts.length} posts`)
+    console.log(`🚀 Starting concurrent comments scraping for ${posts.length} posts`)
     
-    // Update: Apify batch run in progress
-    progressStore.set(progressId, {
-      status: 'scraping',
-      progress: 25,
-      currentStep: `Scraping in progress... (this may take several minutes)`,
-      totalPosts: posts.length,
-      processedPosts: 0
-    })
-    
+    console.log('🐛 DEBUG: About to call apifyService.scrapeAllPostComments with postUrls:', postUrls)
     const allCommentsData = await apifyService.scrapeAllPostComments(postUrls)
-    console.log(`Found ${allCommentsData.length} total comments across all posts`)
+    console.log(`🐛 DEBUG: scrapeAllPostComments returned ${allCommentsData.length} total comments across all posts`)
     
-    // Update: Batch scraping completed
+    // Update: All concurrent scraping completed
     progressStore.set(progressId, {
       status: 'processing',
-      progress: 45,
-      currentStep: `Found ${allCommentsData.length} comments. Processing results...`,
+      progress: 75,
+      currentStep: `✅ Scraping completed! Found ${allCommentsData.length} comments. Now saving to database...`,
       totalPosts: posts.length,
       processedPosts: 0,
       totalComments: allCommentsData.length
     })
 
-    // Update progress: Processing comments
-    progressStore.set(progressId, {
-      status: 'processing',
-      progress: 50,
-      currentStep: `Processing ${allCommentsData.length} comments...`,
-      totalPosts: posts.length,
-      processedPosts: 0,
-      totalComments: allCommentsData.length,
-      processedComments: 0
-    })
+    // Note: Skip redundant progress update - already set above at 75%
 
     // Group comments by post URL
     const commentsByPostUrl = new Map<string, ApifyCommentData[]>()
@@ -190,36 +172,31 @@ async function processCommentsScraping(
 
     const results: any[] = []
     const errors: string[] = []
+    let successfulPosts = 0
 
-    // Process each post
+    // Process each post with progressive saving (database operations are fast)
     for (let i = 0; i < posts.length; i++) {
       const post = posts[i]
-      const postProgress = 50 + (i / posts.length) * 40 // 50-90%
+      const postProgress = 75 + (i / posts.length) * 20 // 75-95% (smaller range since DB ops are fast)
 
       try {
-        progressStore.set(progressId, {
-          status: 'processing',
-          progress: postProgress,
-          currentStep: `Processing post ${i + 1} of ${posts.length}...`,
-          totalPosts: posts.length,
-          processedPosts: i,
-          totalComments: allCommentsData.length,
-          processedComments: results.reduce((sum, r) => sum + r.commentsCount, 0)
-        })
+        // Only update progress every 10 posts or on important posts to avoid spam
+        if (i % 10 === 0 || i === posts.length - 1) {
+          progressStore.set(progressId, {
+            status: 'processing',
+            progress: postProgress,
+            currentStep: `Saving comments to database... (${i + 1}/${posts.length} posts processed)`,
+            totalPosts: posts.length,
+            processedPosts: i,
+            totalComments: allCommentsData.length,
+            processedComments: results.reduce((sum, r) => sum + r.commentsCount, 0)
+          })
+        }
 
         const postComments = commentsByPostUrl.get(post.post_url) || []
-        console.log(`Processing ${postComments.length} comments for post ${post.id}`)
+        console.log(`💾 Saving ${postComments.length} comments for post ${post.id}`)
         
-        // Update: Found comments for this post
-        progressStore.set(progressId, {
-          status: 'processing',
-          progress: postProgress + 1,
-          currentStep: `Saving ${postComments.length} comments for post ${i + 1} of ${posts.length}...`,
-          totalPosts: posts.length,
-          processedPosts: i,
-          totalComments: allCommentsData.length,
-          processedComments: results.reduce((sum, r) => sum + r.commentsCount, 0)
-        })
+        // No separate progress update for individual posts - they're too fast
 
         if (postComments.length > 0) {
           // Filter out comments with invalid data (same as regular API)
@@ -255,19 +232,29 @@ async function processCommentsScraping(
               }
             })
 
-            // Upsert profiles - we'll use profile_url as URN since comments scraper doesn't provide URN (same as regular API)
-            const profilesToUpsert = Array.from(uniqueProfiles.values()).map(author => ({
-              urn: author.profile_url, // Using profile_url as URN for comments-based profiles
-              name: author.name,
-              headline: author.headline,
-              profile_url: author.profile_url,
-              profile_pictures: author.profile_picture ? {
-                original: author.profile_picture,
-                large: author.profile_picture,
-                medium: author.profile_picture,
-                small: author.profile_picture
-              } : null
-            }))
+            // Use same approach as reactions: upsert profiles using URN
+            // For comments, we'll extract URN from profile_url or use profile_url as fallback
+            const profilesToUpsert = Array.from(uniqueProfiles.values()).map(author => {
+              // Try to extract URN from profile_url (like /in/username or /in/ACoAA...)
+              let urn = author.profile_url
+              const urlMatch = author.profile_url.match(/\/in\/([^/?]+)/)
+              if (urlMatch) {
+                urn = urlMatch[1] // Extract the part after /in/
+              }
+
+              return {
+                urn: urn,
+                name: author.name,
+                headline: author.headline,
+                profile_url: author.profile_url,
+                profile_pictures: author.profile_picture ? {
+                  original: author.profile_picture,
+                  large: author.profile_picture,
+                  medium: author.profile_picture,
+                  small: author.profile_picture
+                } : null
+              }
+            })
 
             if (profilesToUpsert.length > 0) {
               const { error: profileError } = await supabase
@@ -283,25 +270,47 @@ async function processCommentsScraping(
               }
             }
 
-            // Get profile IDs for the comments (same as regular API)
+            // Get profile IDs for the comments using URN (same as reactions)
+            const profileUrns = Array.from(uniqueProfiles.values()).map(author => {
+              let urn = author.profile_url
+              const urlMatch = author.profile_url.match(/\/in\/([^/?]+)/)
+              if (urlMatch) {
+                urn = urlMatch[1]
+              }
+              return urn
+            })
+
             const { data: profilesWithIds, error: profilesSelectError } = await supabase
               .from('profiles')
               .select('id, urn')
-              .in('urn', Array.from(uniqueProfiles.keys()))
+              .in('urn', profileUrns)
 
             if (profilesSelectError) {
               console.error('Failed to get profile IDs:', profilesSelectError)
               errors.push(`Failed to get profile IDs for post ${post.id}: ${profilesSelectError.message}`)
             } else {
-              // Create a map of URN to profile ID
-              const urnToIdMap = new Map<string, string>()
+              // Create a map of profile_url to profile ID 
+              const urlToIdMap = new Map<string, string>()
               profilesWithIds?.forEach((profile: { urn: string; id: string }) => {
-                urnToIdMap.set(profile.urn, profile.id)
+                // Find the original profile_url that corresponds to this URN
+                const originalProfile = Array.from(uniqueProfiles.values()).find(author => {
+                  let urn = author.profile_url
+                  const urlMatch = author.profile_url.match(/\/in\/([^/?]+)/)
+                  if (urlMatch) {
+                    urn = urlMatch[1]
+                  }
+                  return urn === profile.urn
+                })
+                if (originalProfile) {
+                  urlToIdMap.set(originalProfile.profile_url, profile.id)
+                }
               })
+
+              console.log(`🔗 Mapped ${urlToIdMap.size} profile URLs to IDs for comments`)
 
               // Prepare comments for insertion
               const comments: Comment[] = validComments.map(comment => {
-                const profileId = urnToIdMap.get(comment.author.profile_url)
+                const profileId = urlToIdMap.get(comment.author.profile_url)
                 if (!profileId) {
                   throw new Error(`Profile ID not found for profile URL: ${comment.author.profile_url}`)
                 }
@@ -343,26 +352,42 @@ async function processCommentsScraping(
                 .insert(comments)
 
               if (insertError) {
-                console.error('Error inserting comments:', insertError)
+                console.error('❌ Error inserting comments:', insertError)
                 errors.push(`Failed to insert comments for post ${post.id}: ${insertError.message}`)
+                
+                results.push({
+                  postId: post.id,
+                  postUrl: post.post_url,
+                  commentsCount: 0,
+                  profilesCount: 0,
+                  status: 'failed',
+                  error: insertError.message
+                })
+              } else {
+                console.log(`✅ Successfully saved ${validComments.length} comments for post ${post.id}`)
+                successfulPosts++
+                
+                results.push({
+                  postId: post.id,
+                  postUrl: post.post_url,
+                  commentsCount: validComments.length,
+                  profilesCount: uniqueProfiles.size,
+                  status: 'success'
+                })
               }
-
-              results.push({
-                postId: post.id,
-                postUrl: post.post_url,
-                commentsCount: validComments.length,
-                profilesCount: uniqueProfiles.size
-              })
             }
           }
 
         } else {
-          // No comments found
+          // No comments found - still count as successful
+          console.log(`✅ No comments found for post ${post.id} (successful)`)
+          successfulPosts++
           results.push({
             postId: post.id,
             postUrl: post.post_url,
             commentsCount: 0,
-            profilesCount: 0
+            profilesCount: 0,
+            status: 'success'
           })
         }
 
@@ -393,30 +418,46 @@ async function processCommentsScraping(
         }
 
       } catch (error) {
-        console.error(`Error processing comments for post ${post.id}:`, error)
+        console.error(`❌ Error processing comments for post ${post.id}:`, error)
         errors.push(`Failed to process post ${post.id}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        
+        // Add failed post to results for tracking
+        results.push({
+          postId: post.id,
+          postUrl: post.post_url,
+          commentsCount: 0,
+          profilesCount: 0,
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Unknown error'
+        })
+        
+        // Continue with next post
+        console.log(`⏭️ Continuing with remaining ${posts.length - i - 1} posts...`)
       }
     }
 
-    // Final progress update
+    // Final progress update with partial success tracking
     const totalComments = results.reduce((sum, result) => sum + result.commentsCount, 0)
     const totalProfiles = results.reduce((sum, result) => sum + result.profilesCount, 0)
+    const failedPosts = posts.length - successfulPosts
     
-    let message = `Successfully scraped comments for ${posts.length} posts`
+    let message = `Comments scraping completed: ${successfulPosts}/${posts.length} posts successful`
     if (totalComments > 0) {
       message += ` • Found ${totalComments} comments from ${totalProfiles} unique profiles`
-    } else {
-      message += ' • No comments found'
+    }
+    
+    if (failedPosts > 0) {
+      message += ` • ${failedPosts} posts failed (data saved for successful posts)`
     }
 
-    if (errors.length > 0) {
-      message += ` • ${errors.length} errors occurred`
-    }
+    // Determine final status based on results
+    const finalStatus = failedPosts === 0 ? 'completed' : 
+                       successfulPosts > 0 ? 'completed' : 'error'
 
     progressStore.set(progressId, {
-      status: 'completed',
+      status: finalStatus,
       progress: 100,
-      currentStep: 'Completed successfully',
+      currentStep: '✅ All operations completed!',
       totalPosts: posts.length,
       processedPosts: posts.length,
       totalComments,
@@ -424,6 +465,8 @@ async function processCommentsScraping(
       result: {
         message,
         postsProcessed: posts.length,
+        successfulPosts,
+        failedPosts,
         totalComments,
         totalProfiles,
         results,
@@ -432,6 +475,18 @@ async function processCommentsScraping(
     })
 
     console.log(`Comments scraping completed for ${posts.length} posts`)
+
+    // Update last sync time to mark this as a completed scraping session
+    try {
+      await supabase
+        .from('user_settings')
+        .update({ last_sync_time: new Date().toISOString() })
+        .eq('user_id', user.id)
+      console.log('Updated last sync time for comments scraping')
+    } catch (syncError) {
+      console.warn('Failed to update last sync time:', syncError)
+      // Don't fail the whole operation for this
+    }
 
   } catch (error) {
     console.error('Error in comments scraping:', error)

@@ -116,7 +116,7 @@ export interface ApifyCommentData {
 }
 
 export interface ScrapeCommentsParams {
-  postUrls: string[]
+  postIds: string[]
   pageNumber?: number
 }
 
@@ -309,13 +309,17 @@ export class ApifyService {
    */
   async scrapePostComments(params: ScrapeCommentsParams): Promise<ApifyCommentData[]> {
     const input = {
-      postUrls: params.postUrls,
+      postIds: params.postIds,
       page_number: params.pageNumber || 1
     }
 
+    console.log('🐛 DEBUG: About to call Apify comments actor with input:', JSON.stringify(input, null, 2))
+
     try {
       // Run the LinkedIn Post Comments Scraper
+      console.log('🐛 DEBUG: Calling Apify actor apimaestro/linkedin-post-comments-replies-engagements-scraper-no-cookies')
       const run = await this.client.actor('apimaestro/linkedin-post-comments-replies-engagements-scraper-no-cookies').call(input)
+      console.log('🐛 DEBUG: Apify run completed with status:', run.status, 'Run ID:', run.id)
       
       if (run.status !== 'SUCCEEDED') {
         throw new Error(`Apify run failed with status: ${run.status}`)
@@ -332,71 +336,186 @@ export class ApifyService {
   }
 
   /**
-   * Scrape all comments for posts with pagination
+   * Scrape all comments for posts with smart pagination
+   * First does bulk call in batches of 100 posts, then paginate only posts with totalComments > 100
    */
   async scrapeAllPostComments(postUrls: string[]): Promise<ApifyCommentData[]> {
-    const allComments: ApifyCommentData[] = []
-    let pageNumber = 1
-    let hasMorePages = true
-    let totalCommentsExpected: number | null = null
-
-    while (hasMorePages) {
-      try {
-        const response = await this.scrapePostComments({
-          postUrls: postUrls,
-          pageNumber
-        })
-
-        // Filter out summary objects and get actual comments
-        const comments = response.filter(item => 
-          item && typeof item === 'object' && 'comment_id' in item
-        ) as ApifyCommentData[]
-
-        console.log(`Page ${pageNumber}: Found ${comments.length} comments`)
-
-        // Set expected total from first page
-        if (totalCommentsExpected === null && comments.length > 0) {
-          totalCommentsExpected = comments[0].totalComments || 0
-          console.log(`Expected total comments: ${totalCommentsExpected}`)
-        }
-
-        if (comments.length === 0) {
-          console.log(`No more comments on page ${pageNumber}, stopping pagination`)
-          hasMorePages = false
-        } else {
-          // Add metadata for pagination tracking
-          const commentsWithMetadata = comments.map(comment => ({
-            ...comment,
-            _metadata: {
-              post_url: comment.post_input,
-              page_number: pageNumber
-            }
-          }))
+    console.log('🐛 DEBUG: scrapeAllPostComments called with postUrls:', postUrls.length, 'posts')
+    
+    try {
+      // Step 1: Batch posts into groups of 100 (Apify limit) and process in bulk
+      const batchSize = 100
+      const batches: string[][] = []
+      
+      for (let i = 0; i < postUrls.length; i += batchSize) {
+        batches.push(postUrls.slice(i, i + batchSize))
+      }
+      
+      console.log(`🐛 DEBUG: Step 1 - Processing ${batches.length} batches of up to ${batchSize} posts each`)
+      
+      let allBulkComments: ApifyCommentData[] = []
+      let allBulkResponses: any[] = []
+      
+      // Process all batches concurrently (up to 32 concurrent Apify runs)
+      console.log(`🐛 DEBUG: Starting ${batches.length} concurrent batch calls`)
+      
+      const batchPromises = batches.map(async (batch, batchIndex) => {
+        console.log(`🐛 DEBUG: Starting batch ${batchIndex + 1}/${batches.length} with ${batch.length} posts`)
+        
+        try {
+          const batchResponse = await this.scrapePostComments({
+            postIds: batch,
+            pageNumber: 1
+          })
           
-          allComments.push(...commentsWithMetadata)
+          // Filter out summary objects and get actual comments
+          const batchComments = batchResponse.filter(item => 
+            item && typeof item === 'object' && 'comment_id' in item
+          ) as ApifyCommentData[]
           
-          // Check if we've got all expected comments
-          if (totalCommentsExpected !== null && allComments.length >= totalCommentsExpected) {
-            console.log(`Collected all ${allComments.length} comments (expected: ${totalCommentsExpected}), stopping pagination`)
-            hasMorePages = false
-          } else {
-            pageNumber++
-            
-            // Safety check to prevent infinite loops
-            if (pageNumber > 10) { // Reduced from 50 to 10 for safety
-              console.warn(`Reached maximum page limit (10) for posts: ${postUrls.join(', ')}`)
-              hasMorePages = false
-            }
+          console.log(`🐛 DEBUG: Batch ${batchIndex + 1} completed: ${batchComments.length} comments for ${batch.length} posts`)
+          
+          return {
+            comments: batchComments,
+            responses: batchResponse,
+            batchIndex: batchIndex + 1
+          }
+        } catch (error) {
+          console.error(`🐛 DEBUG: Batch ${batchIndex + 1} failed:`, error)
+          return {
+            comments: [],
+            responses: [],
+            batchIndex: batchIndex + 1,
+            error
           }
         }
-      } catch (error) {
-        console.error(`Error scraping page ${pageNumber} for posts ${postUrls.join(', ')}:`, error)
-        hasMorePages = false
-      }
-    }
+      })
+      
+      // Wait for all batches to complete
+      const batchResults = await Promise.allSettled(batchPromises)
+      
+      // Process results
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value) {
+          allBulkComments.push(...result.value.comments)
+          allBulkResponses.push(...result.value.responses)
+        } else {
+          console.error(`🐛 DEBUG: Batch ${index + 1} failed:`, result.status === 'rejected' ? result.reason : 'Unknown error')
+        }
+      })
 
-    console.log(`Total comments collected: ${allComments.length}`)
-    return allComments
+      console.log(`🐛 DEBUG: All batches complete - found ${allBulkComments.length} comments for ${postUrls.length} posts`)
+
+      // Step 2: Identify posts that have more than 100 comments (need pagination)
+      const postsNeedingPagination: string[] = []
+      const commentCounts = new Map<string, number>()
+      
+      // Check totalComments from all batch responses to find posts needing pagination
+      allBulkResponses.forEach(item => {
+        if (item && typeof item === 'object' && 'totalComments' in item && 'post_input' in item) {
+          const totalComments = (item as any).totalComments
+          const postUrl = (item as any).post_input
+          
+          if (totalComments > 100) {
+            postsNeedingPagination.push(postUrl)
+            commentCounts.set(postUrl, totalComments)
+          }
+        }
+      })
+
+      console.log(`🐛 DEBUG: Found ${postsNeedingPagination.length} posts needing pagination (>100 comments each)`)
+      
+      // Step 3: Paginate through posts that have more than 100 comments
+      const paginatedComments: ApifyCommentData[] = []
+      const processedPosts = new Set<string>() // Track processed posts to prevent infinite loops
+      
+      for (const postUrl of postsNeedingPagination) {
+        // Skip if already processed (prevent infinite loops)
+        if (processedPosts.has(postUrl)) {
+          console.log(`🐛 DEBUG: Skipping already processed post: ${postUrl}`)
+          continue
+        }
+        
+        processedPosts.add(postUrl)
+        const totalComments = commentCounts.get(postUrl) || 0
+        console.log(`🐛 DEBUG: Paginating post with ${totalComments} total comments: ${postUrl}`)
+        
+        // Start from page 2 since we already have page 1 from bulk call
+        let pageNumber = 2
+        let hasMorePages = true
+        let commentsCollectedForPost = 0
+        
+        while (hasMorePages) {
+          try {
+            console.log(`🐛 DEBUG: Fetching page ${pageNumber} for post with ${totalComments} comments`)
+            const pageResponse = await this.scrapePostComments({
+              postIds: [postUrl], // Single post for pagination
+              pageNumber
+            })
+
+            const pageComments = pageResponse.filter(item => 
+              item && typeof item === 'object' && 'comment_id' in item
+            ) as ApifyCommentData[]
+
+            if (pageComments.length === 0) {
+              console.log(`🐛 DEBUG: No more comments on page ${pageNumber}, stopping pagination for this post`)
+              hasMorePages = false
+            } else {
+              console.log(`🐛 DEBUG: Page ${pageNumber}: Found ${pageComments.length} additional comments`)
+              paginatedComments.push(...pageComments)
+              commentsCollectedForPost += pageComments.length
+              pageNumber++
+              
+              // Safety checks to prevent infinite loops
+              const expectedPages = Math.ceil(totalComments / 100)
+              if (pageNumber > expectedPages + 2) { // +2 for extra safety
+                console.log(`🐛 DEBUG: Reached safety page limit (${expectedPages + 2}) for post with ${totalComments} comments`)
+                hasMorePages = false
+              }
+              
+              // If we've collected enough comments, stop
+              if (commentsCollectedForPost >= totalComments - 100) { // -100 because page 1 was from bulk
+                console.log(`🐛 DEBUG: Collected enough comments (${commentsCollectedForPost} additional) for post with ${totalComments} total`)
+                hasMorePages = false
+              }
+              
+              // Absolute safety limit
+              if (pageNumber > 10) {
+                console.log(`🐛 DEBUG: Absolute safety limit reached (page 10) for post: ${postUrl}`)
+                hasMorePages = false
+              }
+            }
+          } catch (error) {
+            console.error(`🐛 DEBUG: Error on page ${pageNumber} for post ${postUrl}:`, error)
+            hasMorePages = false
+          }
+        }
+        
+        console.log(`🐛 DEBUG: Completed pagination for post: ${commentsCollectedForPost} additional comments collected`)
+      }
+
+      // Step 4: Combine bulk comments with paginated comments
+      const allComments = [...allBulkComments, ...paginatedComments]
+      
+      console.log(`🐛 DEBUG: Smart pagination complete:`)
+      console.log(`  - Bulk comments: ${allBulkComments.length}`)
+      console.log(`  - Paginated comments: ${paginatedComments.length}`)
+      console.log(`  - Total comments: ${allComments.length}`)
+      
+      // Add metadata for tracking
+      const commentsWithMetadata = allComments.map((comment, index) => ({
+        ...comment,
+        _metadata: {
+          post_url: comment.post_input,
+          page_number: index < allBulkComments.length ? 1 : 2 // Approximate page tracking
+        }
+      }))
+      
+      return commentsWithMetadata
+    } catch (error) {
+      console.error(`Error in smart comments scraping for ${postUrls.length} posts:`, error)
+      throw error
+    }
   }
 
   /**

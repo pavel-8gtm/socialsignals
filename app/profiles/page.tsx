@@ -47,15 +47,21 @@ export default function ProfilesPage() {
   const [error, setError] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [filteredProfiles, setFilteredProfiles] = useState<Profile[]>([])
+  const [paginatedProfiles, setPaginatedProfiles] = useState<Profile[]>([])
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage] = useState(100)
   const [user, setUser] = useState<any>(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post'>('reactions')
+  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post'>('latest_post')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [showNewProfilesOnly, setShowNewProfilesOnly] = useState(false)
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null)
   const [timelineDialog, setTimelineDialog] = useState<{
     isOpen: boolean
     profile: Profile | null
     timeline: EngagementTimelineItem[]
     isLoading: boolean
+    counts?: { totalPosts: number; totalReactions: number; totalComments: number }
   }>({
     isOpen: false,
     profile: null,
@@ -71,16 +77,46 @@ export default function ProfilesPage() {
   useEffect(() => {
     if (user) {
       loadProfiles()
+      loadLastSyncTime()
     }
   }, [user])
 
   useEffect(() => {
     filterAndSortProfiles()
-  }, [profiles, searchTerm, sortBy, sortOrder])
+  }, [profiles, searchTerm, sortBy, sortOrder, showNewProfilesOnly])
+
+  useEffect(() => {
+    paginateProfiles()
+  }, [filteredProfiles, currentPage])
+
+  useEffect(() => {
+    // Reset to page 1 when filters change
+    setCurrentPage(1)
+  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly])
 
   async function loadUser() {
     const { data: { user } } = await supabase.auth.getUser()
     setUser(user)
+  }
+
+  async function loadLastSyncTime() {
+    if (!user?.id) return
+    
+    try {
+      const { data, error } = await supabase
+        .from('user_settings')
+        .select('last_sync_time')
+        .eq('user_id', user.id)
+        .single()
+      
+      if (error) {
+        console.error('Error loading last sync time:', error)
+      } else {
+        setLastSyncTime(data?.last_sync_time || null)
+      }
+    } catch (error) {
+      console.error('Error loading last sync time:', error)
+    }
   }
 
   async function loadProfiles() {
@@ -92,26 +128,28 @@ export default function ProfilesPage() {
       }
 
       // Get reactions with profile and post data for the current user
+      // Use SAME query pattern as timeline - start from posts table
       const { data: reactionsData, error: reactionsError } = await supabase
-        .from('reactions')
+        .from('posts')
         .select(`
-          reaction_type,
-          scraped_at,
-          profiles!inner(
-            id,
-            urn,
-            name,
-            headline,
-            profile_url,
-            first_seen,
-            last_updated
-          ),
-          posts!inner(
-            id,
-            post_id,
-            post_url,
-            user_id,
-            posted_at_iso
+          id,
+          post_id,
+          post_url,
+          user_id,
+          posted_at_iso,
+          reactions!inner(
+            reaction_type,
+            scraped_at,
+            reactor_profile_id,
+            profiles!inner(
+              id,
+              urn,
+              name,
+              headline,
+              profile_url,
+              first_seen,
+              last_updated
+            )
           )
         `)
         .eq('user_id', user.id)
@@ -121,28 +159,30 @@ export default function ProfilesPage() {
         throw reactionsError
       }
 
-      // Get comments with profile and post data for the current user
+      // Get comments with profile and post data for the current user  
+      // Use SAME query pattern as timeline - start from posts table
       const { data: commentsData, error: commentsError } = await supabase
-        .from('comments')
+        .from('posts')
         .select(`
-          comment_text,
-          posted_at_date,
-          scraped_at,
-          profiles!inner(
-            id,
-            urn,
-            name,
-            headline,
-            profile_url,
-            first_seen,
-            last_updated
-          ),
-          posts!inner(
-            id,
-            post_id,
-            post_url,
-            user_id,
-            posted_at_iso
+          id,
+          post_id,
+          post_url,
+          user_id,
+          posted_at_iso,
+          comments!inner(
+            comment_text,
+            posted_at_date,
+            scraped_at,
+            commenter_profile_id,
+            profiles!inner(
+              id,
+              urn,
+              name,
+              headline,
+              profile_url,
+              first_seen,
+              last_updated
+            )
           )
         `)
         .eq('user_id', user.id)
@@ -155,121 +195,163 @@ export default function ProfilesPage() {
       console.log('Reactions data:', reactionsData?.length, 'reactions found')
       console.log('Comments data:', commentsData?.length, 'comments found')
 
-      // Transform the data to aggregate by profile
+      // Transform the data to aggregate by profile - SAME LOGIC AS TIMELINE
       const profilesMap = new Map<string, Profile>()
       
-      // Process reactions
-      reactionsData?.forEach(reaction => {
-        const profile = reaction.profiles
-        const post = reaction.posts
+      // For each profile, we need to find unique posts they engaged with
+      // Group reactions by profile first (data structure is now different)
+      const reactionsByProfile = new Map<string, any[]>()
+      reactionsData?.forEach(post => {
+        // Each post can have multiple reactions, group by reactor profile
+        post.reactions?.forEach(reaction => {
+          const profile = reaction.profiles
+          if (!profile) return
+          
+          if (!reactionsByProfile.has(profile.id)) {
+            reactionsByProfile.set(profile.id, [])
+          }
+          reactionsByProfile.get(profile.id)!.push({
+            ...reaction,
+            post: {
+              id: post.id,
+              post_id: post.post_id,
+              post_url: post.post_url,
+              user_id: post.user_id,
+              posted_at_iso: post.posted_at_iso
+            }
+          })
+        })
+      })
+      
+      // Group comments by profile (data structure is now different)
+      const commentsByProfile = new Map<string, any[]>()
+      commentsData?.forEach(post => {
+        // Each post can have multiple comments, group by commenter profile
+        post.comments?.forEach(comment => {
+          const profile = comment.profiles
+          if (!profile) return
+          
+          if (!commentsByProfile.has(profile.id)) {
+            commentsByProfile.set(profile.id, [])
+          }
+          commentsByProfile.get(profile.id)!.push({
+            ...comment,
+            post: {
+              id: post.id,
+              post_id: post.post_id,
+              post_url: post.post_url,
+              user_id: post.user_id,
+              posted_at_iso: post.posted_at_iso
+            }
+          })
+        })
+      })
+      
+      // Get all unique profile IDs
+      const allProfileIds = new Set([
+        ...reactionsByProfile.keys(),
+        ...commentsByProfile.keys()
+      ])
+      
+      // Process each profile exactly like timeline logic
+      allProfileIds.forEach(profileId => {
+        const reactions = reactionsByProfile.get(profileId) || []
+        const comments = commentsByProfile.get(profileId) || []
         
-        if (!profile || !post) return
-
-        const profileId = profile.id
+        // Get profile info from first available record
+        const profile = reactions[0]?.profiles || comments[0]?.profiles
+        if (!profile) return
         
-        if (!profilesMap.has(profileId)) {
-          profilesMap.set(profileId, {
-            ...profile,
-            total_reactions: 0,
-            total_comments: 0,
-            posts_reacted_to: 0,
-            posts_commented_on: 0,
-            posts_engaged_with: 0,
-            reaction_types: [],
-            latest_post_date: post.posted_at_iso,
-            posts: []
+        // Create posts map just like timeline - deduplicate by post ID
+        const postsMap = new Map()
+        
+        // Add reacted posts
+        reactions.forEach(reaction => {
+          const post = reaction.post
+          if (!post) return
+          
+          postsMap.set(post.id, {
+            ...post,
+            engagement_types: ['reaction'],
+            reaction_type: reaction.reaction_type
+          })
+        })
+        
+        // Add commented posts (merge if already exists)
+        comments.forEach(comment => {
+          const post = comment.post
+          if (!post) return
+          
+          const existing = postsMap.get(post.id)
+          if (existing) {
+            existing.engagement_types.push('comment')
+            existing.comment_text = comment.comment_text
+          } else {
+            postsMap.set(post.id, {
+              ...post,
+              engagement_types: ['comment'],
+              comment_text: comment.comment_text
+            })
+          }
+        })
+        
+        const uniquePosts = Array.from(postsMap.values())
+        
+        // Calculate counts exactly like timeline
+        const totalPosts = uniquePosts.length
+        const totalReactions = uniquePosts.filter(post => post.engagement_types.includes('reaction')).length
+        const totalComments = uniquePosts.filter(post => post.engagement_types.includes('comment')).length
+        
+        // Debug Yoav specifically
+        if (profile.name?.includes('Yoav Eitani')) {
+          console.log(`🔍 Yoav aggregation: ${totalPosts} posts, ${totalReactions} reactions, ${totalComments} comments`)
+          uniquePosts.forEach((post, index) => {
+            if (post.engagement_types.includes('reaction')) {
+              console.log(`🐛 Yoav reaction post #${index + 1}: ${post.post_url}`)
+            }
           })
         }
-
-        const aggregatedProfile = profilesMap.get(profileId)!
         
-        // Count total reactions
-        aggregatedProfile.total_reactions = (aggregatedProfile.total_reactions || 0) + 1
+        // Find latest post date
+        const latestPostDate = uniquePosts.reduce((latest, post) => {
+          if (!post.posted_at_iso) return latest
+          return !latest || new Date(post.posted_at_iso) > new Date(latest) 
+            ? post.posted_at_iso 
+            : latest
+        }, null as string | null)
         
-        // Track most recent post date (LinkedIn post publishing date)
-        if (post.posted_at_iso && (!aggregatedProfile.latest_post_date || new Date(post.posted_at_iso) > new Date(aggregatedProfile.latest_post_date))) {
-          aggregatedProfile.latest_post_date = post.posted_at_iso
-        }
-        
-        // Track unique posts (reactions)
-        const postExists = aggregatedProfile.posts?.some(p => p.post_id === post.post_id && p.engagement_type === 'reaction')
-        if (!postExists) {
-          aggregatedProfile.posts?.push({
+        // Store in profiles map
+        profilesMap.set(profileId, {
+          ...profile,
+          total_reactions: totalReactions,
+          total_comments: totalComments,
+          posts_engaged_with: totalPosts,
+          latest_post_date: latestPostDate,
+          reaction_types: reactions.map(r => r.reaction_type).filter((v, i, a) => a.indexOf(v) === i),
+          posts: uniquePosts.map(post => ({
             post_id: post.post_id,
             post_url: post.post_url,
-            engagement_type: 'reaction',
-            reaction_type: reaction.reaction_type,
+            engagement_type: post.engagement_types.join(','),
+            reaction_type: post.reaction_type,
+            comment_text: post.comment_text,
             created_at: post.posted_at_iso || ''
-          })
-        }
-        
-        // Track unique reaction types
-        if (!aggregatedProfile.reaction_types?.includes(reaction.reaction_type)) {
-          aggregatedProfile.reaction_types?.push(reaction.reaction_type)
-        }
-      })
-
-      // Process comments
-      commentsData?.forEach(comment => {
-        const profile = comment.profiles
-        const post = comment.posts
-        
-        if (!profile || !post) return
-
-        const profileId = profile.id
-        
-        if (!profilesMap.has(profileId)) {
-          profilesMap.set(profileId, {
-            ...profile,
-            total_reactions: 0,
-            total_comments: 0,
-            posts_reacted_to: 0,
-            posts_commented_on: 0,
-            posts_engaged_with: 0,
-            reaction_types: [],
-            latest_post_date: post.posted_at_iso,
-            posts: []
-          })
-        }
-
-        const aggregatedProfile = profilesMap.get(profileId)!
-        
-        // Count total comments
-        aggregatedProfile.total_comments = (aggregatedProfile.total_comments || 0) + 1
-        
-        // Track most recent post date (LinkedIn post publishing date)
-        if (post.posted_at_iso && (!aggregatedProfile.latest_post_date || new Date(post.posted_at_iso) > new Date(aggregatedProfile.latest_post_date))) {
-          aggregatedProfile.latest_post_date = post.posted_at_iso
-        }
-        
-        // Track unique posts (comments)
-        const postExists = aggregatedProfile.posts?.some(p => p.post_id === post.post_id && p.engagement_type === 'comment')
-        if (!postExists) {
-          aggregatedProfile.posts?.push({
-            post_id: post.post_id,
-            post_url: post.post_url,
-            engagement_type: 'comment',
-            comment_text: comment.comment_text,
-            created_at: post.posted_at_iso || ''
-          })
-        }
-      })
-
-      // Update aggregated counts
-      profilesMap.forEach(profile => {
-        const reactionPosts = profile.posts?.filter(p => p.engagement_type === 'reaction') || []
-        const commentPosts = profile.posts?.filter(p => p.engagement_type === 'comment') || []
-        const uniquePosts = new Set([
-          ...reactionPosts.map(p => p.post_id),
-          ...commentPosts.map(p => p.post_id)
-        ])
-
-        profile.posts_reacted_to = reactionPosts.length
-        profile.posts_commented_on = commentPosts.length
-        profile.posts_engaged_with = uniquePosts.size
+          }))
+        })
       })
 
       const profilesArray = Array.from(profilesMap.values())
+      
+      // Debug Yoav's final counts
+      const yoavProfile = profilesArray.find(p => p.name?.includes('Yoav Eitani'))
+      if (yoavProfile) {
+        console.log(`🐛 Yoav FINAL COUNTS:`, {
+          total_reactions: yoavProfile.total_reactions,
+          posts_reacted_to: yoavProfile.posts_reacted_to,
+          posts_engaged_with: yoavProfile.posts_engaged_with,
+          posts_array_length: yoavProfile.posts?.length
+        })
+      }
+      
       console.log('Processed profiles:', profilesArray.length)
       setProfiles(profilesArray)
       
@@ -292,8 +374,18 @@ export default function ProfilesPage() {
     }
   }
 
+  // Helper function to check if a profile is new (discovered since last sync)
+  function isNewProfile(profile: Profile): boolean {
+    if (!profile.first_seen) return false
+    if (!lastSyncTime) return false // No sync recorded yet, so no profiles are "new"
+    
+    const firstSeenDate = new Date(profile.first_seen)
+    const lastSyncDate = new Date(lastSyncTime)
+    return firstSeenDate > lastSyncDate
+  }
+
   const loadEngagementTimeline = async (profile: Profile) => {
-    setTimelineDialog(prev => ({ ...prev, isLoading: true, isOpen: true, profile }))
+    setTimelineDialog(prev => ({ ...prev, isLoading: true, isOpen: true, profile, counts: undefined }))
     
     try {
       if (!user?.id) {
@@ -391,17 +483,26 @@ export default function ProfilesPage() {
 
       console.log('Final timeline:', timeline)
 
+      // Calculate counts
+      const totalPosts = timeline.length
+      const totalReactions = timeline.filter(item => item.engagement_types.includes('reaction')).length
+      const totalComments = timeline.filter(item => item.engagement_types.includes('comment')).length
+
+      console.log('Timeline counts:', { totalPosts, totalReactions, totalComments })
+
       setTimelineDialog(prev => ({ 
         ...prev, 
         timeline, 
-        isLoading: false 
+        isLoading: false,
+        counts: { totalPosts, totalReactions, totalComments }
       }))
     } catch (error) {
       console.error('Error loading engagement timeline:', error)
       setTimelineDialog(prev => ({ 
         ...prev, 
         timeline: [], 
-        isLoading: false 
+        isLoading: false,
+        counts: undefined
       }))
     }
   }
@@ -415,6 +516,11 @@ export default function ProfilesPage() {
         profile.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         profile.headline?.toLowerCase().includes(searchTerm.toLowerCase())
       )
+    }
+
+    // Filter for new profiles only (profiles discovered since last sync)
+    if (showNewProfilesOnly) {
+      filtered = filtered.filter(profile => isNewProfile(profile))
     }
 
     // Sort profiles
@@ -447,6 +553,15 @@ export default function ProfilesPage() {
     setFilteredProfiles(filtered)
   }
 
+  function paginateProfiles() {
+    const startIndex = (currentPage - 1) * itemsPerPage
+    const endIndex = startIndex + itemsPerPage
+    const paginated = filteredProfiles.slice(startIndex, endIndex)
+    setPaginatedProfiles(paginated)
+  }
+
+  const totalPages = Math.ceil(filteredProfiles.length / itemsPerPage)
+
   if (!user) {
     return (
       <div className="container mx-auto py-8 px-4">
@@ -468,13 +583,24 @@ export default function ProfilesPage() {
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Profiles</h1>
             <p className="text-gray-600">People who have engaged with your LinkedIn posts (reactions and comments)</p>
           </div>
-          <div className="flex-shrink-0">
+          <div className="flex-shrink-0 flex items-center gap-3">
             <Input
               placeholder="Search by name or headline..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-64"
             />
+            <button
+              onClick={() => setShowNewProfilesOnly(!showNewProfilesOnly)}
+              className={`text-sm cursor-pointer transition-colors border-b border-dotted whitespace-nowrap ${
+                showNewProfilesOnly 
+                  ? "text-green-600 border-green-600" 
+                  : "text-gray-600 hover:text-green-600 border-gray-400 hover:border-green-600"
+              }`}
+              title={showNewProfilesOnly ? "Show all profiles" : "Show only profiles discovered since your last scraping session"}
+            >
+              {showNewProfilesOnly ? "Show all profiles" : "Show new profiles only"}
+            </button>
           </div>
         </div>
 
@@ -487,7 +613,7 @@ export default function ProfilesPage() {
 
         {/* Stats */}
         {!isLoading && profiles.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
             <Card>
               <CardContent className="px-4 py-2">
                 <div className="text-2xl font-bold text-blue-600">{profiles.length}</div>
@@ -497,6 +623,14 @@ export default function ProfilesPage() {
             <Card>
               <CardContent className="px-4 py-2">
                 <div className="text-2xl font-bold text-green-600">
+                  {profiles.filter(p => isNewProfile(p)).length}
+                </div>
+                <div className="text-sm text-gray-600">New Profiles (since last sync)</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="px-4 py-2">
+                <div className="text-2xl font-bold text-purple-600">
                   {profiles.reduce((sum, p) => sum + (p.total_reactions || 0), 0)}
                 </div>
                 <div className="text-sm text-gray-600">Total Reactions</div>
@@ -515,7 +649,68 @@ export default function ProfilesPage() {
 
         {/* Profiles Table */}
         <Card>
-          <CardContent className="p-3">
+          <CardContent className="px-3 py-0">
+            {/* Table count header - only show when filtering */}
+            {!isLoading && profiles.length > 0 && (searchTerm || showNewProfilesOnly) && (
+              <div className="flex items-center justify-between mb-4 pb-3 border-b">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Filtered Results
+                </h3>
+                <div className="text-sm text-gray-600">
+                  Showing {filteredProfiles.length} of {profiles.length} profiles
+                  {searchTerm && ` (filtered by "${searchTerm}")`}
+                  {showNewProfilesOnly && ` (new profiles only)`}
+                  {totalPages > 1 && ` • Page ${currentPage} of ${totalPages}`}
+                </div>
+              </div>
+            )}
+            
+            {/* Top Pagination Controls */}
+            {!isLoading && filteredProfiles.length > 0 && totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-b">
+                <div className="text-sm text-gray-600">
+                  Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of {filteredProfiles.length} profiles
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                  >
+                    First
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-sm text-gray-600 px-3">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Next
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={currentPage === totalPages}
+                  >
+                    Last
+                  </Button>
+                </div>
+              </div>
+            )}
+            
             {isLoading ? (
               <div className="p-3">
                 <div className="space-y-4">
@@ -537,6 +732,7 @@ export default function ProfilesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-12 text-center">#</TableHead>
                     <TableHead 
                       className="cursor-pointer hover:bg-gray-50 select-none"
                       onClick={() => handleSort('name')}
@@ -606,8 +802,11 @@ export default function ProfilesPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredProfiles.map((profile) => (
+                  {paginatedProfiles.map((profile, index) => (
                     <TableRow key={profile.id}>
+                      <TableCell className="text-center text-sm text-gray-500 font-mono">
+                        {(currentPage - 1) * itemsPerPage + index + 1}
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           {profile.profile_url ? (
@@ -632,15 +831,22 @@ export default function ProfilesPage() {
                                   />
                                 </svg>
                               </a>
-                              {/* Clickable Profile Name */}
-                              <a
-                                href={profile.profile_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="font-medium text-sm text-blue-600 hover:text-blue-800 hover:underline"
-                              >
-                                {profile.name || 'Unknown'}
-                              </a>
+                              {/* Clickable Profile Name with New Badge */}
+                              <div className="flex items-center gap-2">
+                                <a
+                                  href={profile.profile_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="font-medium text-sm text-blue-600 hover:text-blue-800 hover:underline"
+                                >
+                                  {profile.name || 'Unknown'}
+                                </a>
+                                {isNewProfile(profile) && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                                    New
+                                  </span>
+                                )}
+                              </div>
                             </>
                           ) : (
                             <>
@@ -658,8 +864,15 @@ export default function ProfilesPage() {
                                   fill="currentColor"
                                 />
                               </svg>
-                              {/* Non-clickable Profile Name */}
-                              <div className="font-medium text-sm">{profile.name || 'Unknown'}</div>
+                              {/* Non-clickable Profile Name with New Badge */}
+                              <div className="flex items-center gap-2">
+                                <div className="font-medium text-sm">{profile.name || 'Unknown'}</div>
+                                {isNewProfile(profile) && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                                    New
+                                  </span>
+                                )}
+                              </div>
                             </>
                           )}
                         </div>
@@ -700,6 +913,52 @@ export default function ProfilesPage() {
                 </TableBody>
               </Table>
             )}
+            
+            {/* Bottom Pagination Controls */}
+            {!isLoading && filteredProfiles.length > 0 && totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t">
+                <div className="text-sm text-gray-600">
+                  Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of {filteredProfiles.length} profiles
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                  >
+                    First
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-sm text-gray-600 px-3">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Next
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={currentPage === totalPages}
+                  >
+                    Last
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -727,6 +986,22 @@ export default function ProfilesPage() {
                 </svg>
                 Engagement Timeline - {timelineDialog.profile?.name || 'Unknown'}
               </DialogTitle>
+              {timelineDialog.counts && (
+                <div className="flex gap-6 text-sm text-gray-600 mt-2">
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium">{timelineDialog.counts.totalPosts}</span>
+                    <span>Posts</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium">{timelineDialog.counts.totalReactions}</span>
+                    <span>Reactions</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium">{timelineDialog.counts.totalComments}</span>
+                    <span>Comments</span>
+                  </div>
+                </div>
+              )}
             </DialogHeader>
             
             <div className="flex-1 overflow-y-auto min-h-0">

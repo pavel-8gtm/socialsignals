@@ -407,6 +407,18 @@ async function processReactionsScraping(
 
     console.log(`Reactions scraping completed for ${posts.length} posts`)
 
+    // Update last sync time to mark this as a completed scraping session
+    try {
+      await supabase
+        .from('user_settings')
+        .update({ last_sync_time: new Date().toISOString() })
+        .eq('user_id', user.id)
+      console.log('Updated last sync time for reactions scraping')
+    } catch (syncError) {
+      console.warn('Failed to update last sync time:', syncError)
+      // Don't fail the whole operation for this
+    }
+
   } catch (error) {
     console.error('Error in reactions scraping:', error)
     progressStore.set(progressId, {
