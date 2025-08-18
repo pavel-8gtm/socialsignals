@@ -171,6 +171,17 @@ export type Database = {
           profile_pictures: Json | null
           profile_url: string | null
           urn: string
+          first_name: string | null
+          last_name: string | null
+          profile_picture_url: string | null
+          country: string | null
+          city: string | null
+          current_title: string | null
+          current_company: string | null
+          is_current_position: boolean | null
+          company_linkedin_url: string | null
+          public_identifier: string | null
+          enriched_at: string | null
         }
         Insert: {
           first_seen?: string | null
@@ -181,6 +192,17 @@ export type Database = {
           profile_pictures?: Json | null
           profile_url?: string | null
           urn: string
+          first_name?: string | null
+          last_name?: string | null
+          profile_picture_url?: string | null
+          country?: string | null
+          city?: string | null
+          current_title?: string | null
+          current_company?: string | null
+          is_current_position?: boolean | null
+          company_linkedin_url?: string | null
+          public_identifier?: string | null
+          enriched_at?: string | null
         }
         Update: {
           first_seen?: string | null
@@ -191,6 +213,17 @@ export type Database = {
           profile_pictures?: Json | null
           profile_url?: string | null
           urn?: string
+          first_name?: string | null
+          last_name?: string | null
+          profile_picture_url?: string | null
+          country?: string | null
+          city?: string | null
+          current_title?: string | null
+          current_company?: string | null
+          is_current_position?: boolean | null
+          company_linkedin_url?: string | null
+          public_identifier?: string | null
+          enriched_at?: string | null
         }
         Relationships: []
       }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -10,6 +10,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Checkbox } from '@/components/ui/checkbox'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Download, ChevronDown, Copy } from 'lucide-react'
 import type { Database } from '@/lib/types/database.types'
 
 type EngagementTimelineItem = {
@@ -32,6 +35,7 @@ type Profile = Database['public']['Tables']['profiles']['Row'] & {
   posts_engaged_with?: number
   reaction_types?: string[]
   latest_post_date?: string
+  latest_post_url?: string
   posts?: Array<{
     post_id: string
     post_url: string
@@ -45,6 +49,15 @@ type Profile = Database['public']['Tables']['profiles']['Row'] & {
 export default function ProfilesPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [isEnriching, setIsEnriching] = useState(false)
+  const [enrichmentProgress, setEnrichmentProgress] = useState<{
+    progress: number
+    total: number
+    currentStep: string
+    profilesProcessed: number
+    totalProfiles: number
+  } | null>(null)
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [filteredProfiles, setFilteredProfiles] = useState<Profile[]>([])
   const [paginatedProfiles, setPaginatedProfiles] = useState<Profile[]>([])
@@ -52,10 +65,12 @@ export default function ProfilesPage() {
   const [itemsPerPage] = useState(100)
   const [user, setUser] = useState<any>(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post'>('latest_post')
+  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'location' | 'company'>('latest_post')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [showNewProfilesOnly, setShowNewProfilesOnly] = useState(false)
+  const [showNeedsEnrichmentOnly, setShowNeedsEnrichmentOnly] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null)
+  const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set())
   const [timelineDialog, setTimelineDialog] = useState<{
     isOpen: boolean
     profile: Profile | null
@@ -70,6 +85,167 @@ export default function ProfilesPage() {
   })
   const supabase = createClient()
 
+  // Selection management functions
+  const toggleProfileSelection = (profileId: string) => {
+    const newSelected = new Set(selectedProfiles)
+    if (newSelected.has(profileId)) {
+      newSelected.delete(profileId)
+    } else {
+      newSelected.add(profileId)
+    }
+    setSelectedProfiles(newSelected)
+  }
+
+  const selectAllCurrentPage = () => {
+    const currentPageIds = new Set(paginatedProfiles.map(p => p.id))
+    setSelectedProfiles(currentPageIds)
+  }
+
+  const selectAllFiltered = () => {
+    const allFilteredIds = new Set(filteredProfiles.map(p => p.id))
+    setSelectedProfiles(allFilteredIds)
+  }
+
+  const clearSelection = () => {
+    setSelectedProfiles(new Set())
+  }
+
+  const isAllCurrentPageSelected = paginatedProfiles.length > 0 && 
+    paginatedProfiles.every(p => selectedProfiles.has(p.id))
+
+  const isAllFilteredSelected = filteredProfiles.length > 0 && 
+    filteredProfiles.every(p => selectedProfiles.has(p.id))
+
+  const isSomeCurrentPageSelected = paginatedProfiles.some(p => selectedProfiles.has(p.id))
+
+  // Copy to Clipboard function (for Google Sheets)
+  const copyToClipboard = async () => {
+    // Only copy selected profiles
+    const profilesToCopy = filteredProfiles.filter(p => selectedProfiles.has(p.id))
+
+    if (profilesToCopy.length === 0) {
+      alert('No profiles selected to copy')
+      return
+    }
+
+    // Prepare data for clipboard in tab-separated format (TSV)
+    const headers = [
+      'Name',
+      'Headline', 
+      'Profile URL',
+      'URN',
+      'First Seen',
+      'Last Updated',
+      'Total Reactions',
+      'Total Comments',
+      'Posts Engaged With',
+      'Last Engaged Post URL',
+      'Last Engaged Post Date',
+      'Current Title',
+      'Current Company',
+      'Location',
+      'Profile Picture URL'
+    ]
+    
+    const rows = profilesToCopy.map(profile => [
+      profile.first_name && profile.last_name 
+        ? `${profile.first_name} ${profile.last_name}`
+        : profile.name || '',
+      profile.headline || '',
+      profile.profile_url || '',
+      profile.urn || '',
+      profile.first_seen ? new Date(profile.first_seen).toLocaleDateString() : '',
+      profile.last_updated ? new Date(profile.last_updated).toLocaleDateString() : '',
+      String(profile.total_reactions || 0),
+      String(profile.total_comments || 0),
+      String(profile.posts_engaged_with || 0),
+      profile.latest_post_url || '',
+      profile.latest_post_date ? new Date(profile.latest_post_date).toLocaleDateString() : '',
+      profile.current_title || '',
+      profile.current_company || '',
+      [profile.city, profile.country].filter(Boolean).join(', ') || '',
+      profile.profile_picture_url || profile.profile_pictures?.small || ''
+    ])
+
+    // Join with tabs for columns and newlines for rows
+    const tsvContent = [headers.join('\t'), ...rows.map(row => row.join('\t'))].join('\n')
+
+    try {
+      await navigator.clipboard.writeText(tsvContent)
+      
+      // Show success feedback
+      setSuccess(`Copied ${profilesToCopy.length} profiles to clipboard! Ready to paste in Google Sheets.`)
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error)
+      setError('Failed to copy to clipboard. Please try the CSV export instead.')
+      setTimeout(() => setError(null), 3000)
+    }
+  }
+
+  // CSV Export function
+  const exportToCSV = () => {
+    // Export only selected profiles, or all if none selected
+    const profilesToExport = selectedProfiles.size > 0 
+      ? filteredProfiles.filter(p => selectedProfiles.has(p.id))
+      : filteredProfiles
+
+    if (profilesToExport.length === 0) {
+      alert('No profiles selected for export')
+      return
+    }
+
+    // Prepare data for CSV export
+    const csvData = profilesToExport.map(profile => {
+      return {
+        'Name': profile.first_name && profile.last_name 
+          ? `${profile.first_name} ${profile.last_name}`
+          : profile.name || '',
+        'Headline': profile.headline || '',
+        'Profile URL': profile.profile_url || '',
+        'URN': profile.urn || '',
+        'First Seen': profile.first_seen ? new Date(profile.first_seen).toLocaleDateString() : '',
+        'Last Updated': profile.last_updated ? new Date(profile.last_updated).toLocaleDateString() : '',
+        'Total Reactions': profile.total_reactions || 0,
+        'Total Comments': profile.total_comments || 0,
+        'Posts Engaged With': profile.posts_engaged_with || 0,
+        'Last Engaged Post URL': profile.latest_post_url || '',
+        'Last Engaged Post Date': profile.latest_post_date ? new Date(profile.latest_post_date).toLocaleDateString() : '',
+        'Current Title': profile.current_title || '',
+        'Current Company': profile.current_company || '',
+        'Location': [profile.city, profile.country].filter(Boolean).join(', ') || '',
+        'Profile Picture URL': profile.profile_picture_url || ''
+      }
+    })
+
+    // Convert to CSV
+    const headers = Object.keys(csvData[0] || {})
+    const csvContent = [
+      headers.join(','),
+      ...csvData.map(row => 
+        headers.map(header => {
+          const value = row[header] || ''
+          // Escape quotes and wrap in quotes if contains comma
+          return typeof value === 'string' && (value.includes(',') || value.includes('"')) 
+            ? `"${value.replace(/"/g, '""')}"` 
+            : value
+        }).join(',')
+      )
+    ].join('\n')
+
+    // Download the CSV
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    const suffix = selectedProfiles.size > 0 ? `-selected-${selectedProfiles.size}` : ''
+    link.setAttribute('download', `linkedin-profiles${suffix}-${new Date().toISOString().split('T')[0]}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   useEffect(() => {
     loadUser()
   }, [])
@@ -82,17 +258,14 @@ export default function ProfilesPage() {
   }, [user])
 
   useEffect(() => {
-    filterAndSortProfiles()
-  }, [profiles, searchTerm, sortBy, sortOrder, showNewProfilesOnly])
-
-  useEffect(() => {
     paginateProfiles()
   }, [filteredProfiles, currentPage])
 
   useEffect(() => {
-    // Reset to page 1 when filters change
+    // Reset to page 1 and clear selection when filters change
     setCurrentPage(1)
-  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly])
+    setSelectedProfiles(new Set())
+  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly])
 
   async function loadUser() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -113,6 +286,7 @@ export default function ProfilesPage() {
         console.error('Error loading last sync time:', error)
       } else {
         setLastSyncTime(data?.last_sync_time || null)
+        console.log('Loaded last sync time:', data?.last_sync_time)
       }
     } catch (error) {
       console.error('Error loading last sync time:', error)
@@ -138,21 +312,36 @@ export default function ProfilesPage() {
           user_id,
           posted_at_iso,
           reactions!inner(
-            reaction_type,
-            scraped_at,
+          reaction_type,
+          scraped_at,
             reactor_profile_id,
-            profiles!inner(
-              id,
-              urn,
-              name,
-              headline,
-              profile_url,
-              first_seen,
-              last_updated
+          profiles!inner(
+            id,
+            urn,
+            name,
+            headline,
+            profile_url,
+            first_seen,
+            last_updated,
+            first_name,
+            last_name,
+            profile_picture_url,
+            profile_pictures,
+            country,
+            city,
+            current_title,
+            current_company,
+            is_current_position,
+            company_linkedin_url,
+            public_identifier,
+            primary_identifier,
+            secondary_identifier,
+            enriched_at
             )
           )
         `)
         .eq('user_id', user.id)
+        .not('reactions.profiles.profile_url', 'ilike', '%/company/%')
 
       if (reactionsError) {
         console.error('Reactions query error:', reactionsError)
@@ -164,10 +353,10 @@ export default function ProfilesPage() {
       const { data: commentsData, error: commentsError } = await supabase
         .from('posts')
         .select(`
-          id,
-          post_id,
-          post_url,
-          user_id,
+            id,
+            post_id,
+            post_url,
+            user_id,
           posted_at_iso,
           comments!inner(
             comment_text,
@@ -181,11 +370,25 @@ export default function ProfilesPage() {
               headline,
               profile_url,
               first_seen,
-              last_updated
+              last_updated,
+              first_name,
+              last_name,
+              profile_picture_url,
+              country,
+              city,
+              current_title,
+              current_company,
+              is_current_position,
+              company_linkedin_url,
+              public_identifier,
+              primary_identifier,
+              secondary_identifier,
+              enriched_at
             )
           )
         `)
         .eq('user_id', user.id)
+        .not('comments.profiles.profile_url', 'ilike', '%/company/%')
 
       if (commentsError) {
         console.error('Comments query error:', commentsError)
@@ -204,7 +407,7 @@ export default function ProfilesPage() {
       reactionsData?.forEach(post => {
         // Each post can have multiple reactions, group by reactor profile
         post.reactions?.forEach(reaction => {
-          const profile = reaction.profiles
+        const profile = reaction.profiles
           if (!profile) return
           
           if (!reactionsByProfile.has(profile.id)) {
@@ -320,6 +523,13 @@ export default function ProfilesPage() {
             : latest
         }, null as string | null)
         
+        // Find the URL of the most recent engagement
+        const latestPost = uniquePosts.reduce((latest, post) => {
+          const postDate = post.posted_at_iso ? new Date(post.posted_at_iso) : new Date(0)
+          const latestDate = latest ? new Date(latest.posted_at_iso || 0) : new Date(0)
+          return postDate > latestDate ? post : latest
+        }, null as any)
+
         // Store in profiles map
         profilesMap.set(profileId, {
           ...profile,
@@ -327,6 +537,7 @@ export default function ProfilesPage() {
           total_comments: totalComments,
           posts_engaged_with: totalPosts,
           latest_post_date: latestPostDate,
+          latest_post_url: latestPost?.post_url || null,
           reaction_types: reactions.map(r => r.reaction_type).filter((v, i, a) => a.indexOf(v) === i),
           posts: uniquePosts.map(post => ({
             post_id: post.post_id,
@@ -363,10 +574,10 @@ export default function ProfilesPage() {
     }
   }
 
-  function handleSort(column: 'name' | 'reactions' | 'comments' | 'posts' | 'latest_post') {
+  const handleSort = (column: 'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'location' | 'company') => {
     if (sortBy === column) {
       // Toggle sort order if clicking the same column
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
     } else {
       // Set new column and default to desc for numeric columns, asc for name
       setSortBy(column)
@@ -374,15 +585,98 @@ export default function ProfilesPage() {
     }
   }
 
+  // Enrich selected profiles function
+  const enrichSelectedProfiles = async () => {
+    if (selectedProfiles.size === 0) {
+      setError('Please select profiles to enrich')
+      return
+    }
+
+    setIsEnriching(true)
+    setEnrichmentProgress(null)
+    setError(null)
+    setSuccess(null)
+
+    try {
+      const profileIds = Array.from(selectedProfiles)
+      
+      const response = await fetch('/api/scrape/enrich-profiles-progress', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ profileIds }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to start enrichment')
+      }
+
+      if (!response.body) {
+        throw new Error('No response body')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+
+      while (true) {
+        const { done, value } = await reader.read()
+        
+        if (done) break
+
+        const chunk = decoder.decode(value)
+        const lines = chunk.split('\n')
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              
+              if (data.error) {
+                throw new Error(data.error)
+              }
+              
+              setEnrichmentProgress(data)
+              
+              if (data.completed) {
+                setSuccess(`Profile enrichment completed! Updated ${data.profilesProcessed} profiles.`)
+                // Reload profiles to show enriched data
+                setTimeout(() => {
+                  loadProfiles()
+                }, 1000)
+              }
+            } catch (parseError) {
+              console.error('Error parsing progress data:', parseError)
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error enriching profiles:', error)
+      setError(error instanceof Error ? error.message : 'Failed to enrich profiles')
+    } finally {
+      setIsEnriching(false)
+      setEnrichmentProgress(null)
+    }
+  }
+
   // Helper function to check if a profile is new (discovered since last sync)
-  function isNewProfile(profile: Profile): boolean {
+  const isNewProfile = useCallback((profile: Profile): boolean => {
     if (!profile.first_seen) return false
     if (!lastSyncTime) return false // No sync recorded yet, so no profiles are "new"
     
     const firstSeenDate = new Date(profile.first_seen)
     const lastSyncDate = new Date(lastSyncTime)
-    return firstSeenDate > lastSyncDate
-  }
+    const timeDifference = firstSeenDate.getTime() - lastSyncDate.getTime()
+    
+    // Consider profiles "new" if they were created within 5 minutes before sync time
+    // This accounts for profiles discovered during the same scraping session
+    const SCRAPING_SESSION_WINDOW = 5 * 60 * 1000 // 5 minutes in milliseconds
+    const isNew = timeDifference > -SCRAPING_SESSION_WINDOW
+    
+    return isNew
+  }, [lastSyncTime])
 
   const loadEngagementTimeline = async (profile: Profile) => {
     setTimelineDialog(prev => ({ ...prev, isLoading: true, isOpen: true, profile, counts: undefined }))
@@ -507,51 +801,82 @@ export default function ProfilesPage() {
     }
   }
 
-  function filterAndSortProfiles() {
-    let filtered = profiles
+  const getSortValue = useCallback((profile: Profile, column: string) => {
+    switch (column) {
+      case 'name':
+        return profile.name?.toLowerCase() || ''
+      case 'reactions':
+        return profile.total_reactions || 0
+      case 'comments':
+        return profile.total_comments || 0
+      case 'posts':
+        return profile.posts_engaged_with || 0
+      case 'latest_post':
+        return profile.latest_post_date ? new Date(profile.latest_post_date).getTime() : 0
+      case 'first_seen':
+        return profile.first_seen ? new Date(profile.first_seen).getTime() : 0
+      case 'location':
+        return [profile.city, profile.country].filter(Boolean).join(', ').toLowerCase()
+      case 'company':
+        return profile.current_company?.toLowerCase() || ''
+      default:
+        return 0
+    }
+  }, [])
 
-    // Filter by search term
-    if (searchTerm) {
-      filtered = filtered.filter(profile =>
+  const filterAndSortProfiles = useCallback(() => {
+    if (!profiles || profiles.length === 0) {
+      setFilteredProfiles([])
+      return
+    }
+
+    // Start with a copy of all profiles
+    let result = [...profiles]
+
+    // Apply search filter
+    if (searchTerm.trim()) {
+      result = result.filter(profile =>
         profile.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         profile.headline?.toLowerCase().includes(searchTerm.toLowerCase())
       )
     }
 
-    // Filter for new profiles only (profiles discovered since last sync)
+    // Apply new profiles filter
     if (showNewProfilesOnly) {
-      filtered = filtered.filter(profile => isNewProfile(profile))
+      result = result.filter(profile => isNewProfile(profile))
     }
 
-    // Sort profiles
-    filtered.sort((a, b) => {
+    // Apply needs enrichment filter
+    if (showNeedsEnrichmentOnly) {
+      result = result.filter(profile => !profile.first_name || profile.first_name.trim() === '')
+    }
+
+    // Apply sorting
+    result.sort((a, b) => {
+      const valueA = getSortValue(a, sortBy)
+      const valueB = getSortValue(b, sortBy)
+
       let comparison = 0
       
-      switch (sortBy) {
-        case 'name':
-          comparison = (a.name || '').localeCompare(b.name || '')
-          break
-        case 'reactions':
-          comparison = (a.total_reactions || 0) - (b.total_reactions || 0)
-          break
-        case 'comments':
-          comparison = (a.total_comments || 0) - (b.total_comments || 0)
-          break
-        case 'posts':
-          comparison = (a.posts_engaged_with || 0) - (b.posts_engaged_with || 0)
-          break
-        case 'latest_post':
-          const dateA = a.latest_post_date ? new Date(a.latest_post_date).getTime() : 0
-          const dateB = b.latest_post_date ? new Date(b.latest_post_date).getTime() : 0
-          comparison = dateA - dateB
-          break
+      if (sortBy === 'name' || sortBy === 'location' || sortBy === 'company') {
+        // String comparison for text fields
+        comparison = (valueA as string).localeCompare(valueB as string)
+      } else {
+        // Numeric comparison for numeric fields
+        comparison = (valueA as number) - (valueB as number)
       }
 
+      // Apply sort order
       return sortOrder === 'asc' ? comparison : -comparison
     })
 
-    setFilteredProfiles(filtered)
-  }
+    setFilteredProfiles(result)
+  }, [profiles, searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, getSortValue, isNewProfile])
+
+  // Effect to trigger filtering and sorting when dependencies change
+  useEffect(() => {
+    filterAndSortProfiles()
+  }, [filterAndSortProfiles])
 
   function paginateProfiles() {
     const startIndex = (currentPage - 1) * itemsPerPage
@@ -580,28 +905,10 @@ export default function ProfilesPage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Profiles</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Profiles</h1>
             <p className="text-gray-600">People who have engaged with your LinkedIn posts (reactions and comments)</p>
-          </div>
-          <div className="flex-shrink-0 flex items-center gap-3">
-            <Input
-              placeholder="Search by name or headline..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-64"
-            />
-            <button
-              onClick={() => setShowNewProfilesOnly(!showNewProfilesOnly)}
-              className={`text-sm cursor-pointer transition-colors border-b border-dotted whitespace-nowrap ${
-                showNewProfilesOnly 
-                  ? "text-green-600 border-green-600" 
-                  : "text-gray-600 hover:text-green-600 border-gray-400 hover:border-green-600"
-              }`}
-              title={showNewProfilesOnly ? "Show all profiles" : "Show only profiles discovered since your last scraping session"}
-            >
-              {showNewProfilesOnly ? "Show all profiles" : "Show new profiles only"}
-            </button>
-          </div>
+        </div>
+
         </div>
 
         {/* Error Message */}
@@ -611,21 +918,65 @@ export default function ProfilesPage() {
           </Alert>
         )}
 
+        {/* Success Message */}
+        {success && (
+          <Alert className="mb-6 border-green-200 bg-green-50">
+            <AlertDescription className="text-green-800">{success}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Enrichment Progress */}
+        {isEnriching && enrichmentProgress && (
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-blue-900">Profile Enrichment</span>
+              <span className="text-sm text-blue-700">
+                {enrichmentProgress.profilesProcessed} / {enrichmentProgress.totalProfiles} profiles
+              </span>
+            </div>
+            <div className="w-full bg-blue-200 rounded-full h-2 mb-2">
+              <div 
+                className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out" 
+                style={{ width: `${enrichmentProgress.progress}%` }}
+              ></div>
+            </div>
+            <p className="text-sm text-blue-800">{enrichmentProgress.currentStep}</p>
+          </div>
+        )}
+
         {/* Stats */}
         {!isLoading && profiles.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6">
             <Card>
               <CardContent className="px-4 py-2">
                 <div className="text-2xl font-bold text-blue-600">{profiles.length}</div>
                 <div className="text-sm text-gray-600">Total Profiles</div>
               </CardContent>
             </Card>
-            <Card>
+            <Card 
+              className="cursor-pointer transition-all duration-200 hover:shadow-md hover:ring-1 hover:ring-green-300"
+              onClick={() => setShowNewProfilesOnly(!showNewProfilesOnly)}
+            >
               <CardContent className="px-4 py-2">
                 <div className="text-2xl font-bold text-green-600">
                   {profiles.filter(p => isNewProfile(p)).length}
                 </div>
-                <div className="text-sm text-gray-600">New Profiles (since last sync)</div>
+                <div className="text-sm text-gray-600">
+                  New Profiles (since last sync)
+                </div>
+              </CardContent>
+            </Card>
+            <Card 
+              className="cursor-pointer transition-all duration-200 hover:shadow-md hover:ring-1 hover:ring-blue-300"
+              onClick={() => setShowNeedsEnrichmentOnly(!showNeedsEnrichmentOnly)}
+            >
+              <CardContent className="px-4 py-2">
+                <div className="text-2xl font-bold text-blue-600">
+                  {profiles.filter(p => !p.first_name || p.first_name.trim() === '').length}
+                </div>
+                <div className="text-sm text-gray-600">
+                  Needs Enrichment
+                </div>
               </CardContent>
             </Card>
             <Card>
@@ -647,31 +998,78 @@ export default function ProfilesPage() {
           </div>
         )}
 
+        {/* Search and Actions Bar */}
+        {profiles.length > 0 && (
+          <div className="flex items-center justify-between mb-6">
+            <Input
+              placeholder="Search by name or headline..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-80"
+            />
+            <div className="flex items-center gap-2">
+              {selectedProfiles.size > 0 && (
+                <>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={enrichSelectedProfiles}
+                    disabled={isEnriching}
+                    className="whitespace-nowrap"
+                  >
+                    {isEnriching ? (
+                      <>
+                        <div className="h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Enriching...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Enrich ({selectedProfiles.size})
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={copyToClipboard}
+                    className="whitespace-nowrap"
+                  >
+                    Copy to Clipboard ({selectedProfiles.size})
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={exportToCSV}
+                    className="whitespace-nowrap"
+                  >
+                    Export CSV ({selectedProfiles.size})
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Profiles Table */}
         <Card>
           <CardContent className="px-3 py-0">
-            {/* Table count header - only show when filtering */}
-            {!isLoading && profiles.length > 0 && (searchTerm || showNewProfilesOnly) && (
-              <div className="flex items-center justify-between mb-4 pb-3 border-b">
-                <h3 className="text-lg font-semibold text-gray-900">
-                  Filtered Results
-                </h3>
-                <div className="text-sm text-gray-600">
-                  Showing {filteredProfiles.length} of {profiles.length} profiles
-                  {searchTerm && ` (filtered by "${searchTerm}")`}
-                  {showNewProfilesOnly && ` (new profiles only)`}
-                  {totalPages > 1 && ` • Page ${currentPage} of ${totalPages}`}
-                </div>
-              </div>
-            )}
-            
+
             {/* Top Pagination Controls */}
-            {!isLoading && filteredProfiles.length > 0 && totalPages > 1 && (
+            {!isLoading && filteredProfiles.length > 0 && (
               <div className="flex items-center justify-between px-4 py-3 border-b">
                 <div className="text-sm text-gray-600">
-                  Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of {filteredProfiles.length} profiles
+                  {selectedProfiles.size > 0 ? (
+                    `${selectedProfiles.size} profile${selectedProfiles.size === 1 ? '' : 's'} selected`
+                  ) : (
+                    (totalPages > 1 || searchTerm || showNewProfilesOnly || showNeedsEnrichmentOnly) && `Showing ${(currentPage - 1) * itemsPerPage + 1} to ${Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of ${filteredProfiles.length} profiles`
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex-1"></div>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
@@ -707,7 +1105,8 @@ export default function ProfilesPage() {
                   >
                     Last
                   </Button>
-                </div>
+                  </div>
+                )}
               </div>
             )}
             
@@ -733,6 +1132,35 @@ export default function ProfilesPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-12 text-center">#</TableHead>
+                    <TableHead className="w-12">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <div className="flex items-center cursor-pointer">
+                            <Checkbox
+                              checked={isAllCurrentPageSelected}
+                              ref={(el) => {
+                                if (el) {
+                                  el.indeterminate = !isAllCurrentPageSelected && isSomeCurrentPageSelected
+                                }
+                              }}
+                              onChange={() => {}}
+                            />
+                            <ChevronDown className="h-3 w-3 ml-1" />
+                          </div>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem onClick={selectAllCurrentPage}>
+                            Select Page ({paginatedProfiles.length})
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={selectAllFiltered}>
+                            Select All Filtered ({filteredProfiles.length})
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={clearSelection}>
+                            Clear Selection
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableHead>
                     <TableHead 
                       className="cursor-pointer hover:bg-gray-50 select-none"
                       onClick={() => handleSort('name')}
@@ -746,7 +1174,6 @@ export default function ProfilesPage() {
                         )}
                       </div>
                     </TableHead>
-                    <TableHead>Headline</TableHead>
                     <TableHead 
                       className="cursor-pointer hover:bg-gray-50 select-none"
                       onClick={() => handleSort('reactions')}
@@ -799,6 +1226,19 @@ export default function ProfilesPage() {
                         )}
                       </div>
                     </TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('first_seen')}
+                    >
+                      <div className="flex items-center gap-1">
+                        First Seen
+                        {sortBy === 'first_seen' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -808,78 +1248,116 @@ export default function ProfilesPage() {
                         {(currentPage - 1) * itemsPerPage + index + 1}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          {profile.profile_url ? (
-                            <>
-                              {/* Clickable LinkedIn Icon */}
-                              <a
-                                href={profile.profile_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 flex-shrink-0"
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                >
-                                  <path
-                                    d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"
-                                    fill="currentColor"
-                                  />
-                                </svg>
-                              </a>
-                              {/* Clickable Profile Name with New Badge */}
-                              <div className="flex items-center gap-2">
-                                <a
-                                  href={profile.profile_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="font-medium text-sm text-blue-600 hover:text-blue-800 hover:underline"
-                                >
-                                  {profile.name || 'Unknown'}
-                                </a>
-                                {isNewProfile(profile) && (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                                    New
-                                  </span>
-                                )}
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              {/* Non-clickable LinkedIn Icon */}
-                              <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                                className="text-gray-400 flex-shrink-0"
-                              >
-                                <path
-                                  d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"
-                                  fill="currentColor"
-                                />
-                              </svg>
-                              {/* Non-clickable Profile Name with New Badge */}
-                              <div className="flex items-center gap-2">
-                                <div className="font-medium text-sm">{profile.name || 'Unknown'}</div>
-                                {isNewProfile(profile) && (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                                    New
-                                  </span>
-                                )}
-                              </div>
-                            </>
-                          )}
-                        </div>
+                        <Checkbox
+                          checked={selectedProfiles.has(profile.id)}
+                          onCheckedChange={() => toggleProfileSelection(profile.id)}
+                        />
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm text-gray-600 max-w-xs truncate">
-                          {profile.headline || 'No headline'}
+                        <div className="flex items-center gap-3">
+                          {/* Profile Picture */}
+                          {(() => {
+                            const profilePictureUrl = profile.profile_picture_url || 
+                              (profile.profile_pictures?.small);
+                            
+                            return profilePictureUrl ? (
+                              <img
+                                src={profilePictureUrl}
+                                alt={`${profile.first_name || profile.name || 'Unknown'}'s profile`}
+                                className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none'
+                                }}
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                              <svg className="w-6 h-6 text-gray-400" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M24 20.993V24H0v-2.996A14.977 14.977 0 0112.004 15c4.904 0 9.26 2.354 11.996 5.993zM16.002 8.999a4 4 0 11-8 0 4 4 0 018 0z" />
+                              </svg>
+                            </div>
+                            );
+                          })()}
+                          
+                          <div className="flex-1 min-w-0">
+                            {/* Name and LinkedIn Link */}
+                        {profile.profile_url ? (
+                              <div className="flex items-center gap-2">
+                          <a
+                            href={profile.profile_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                                  className="flex items-center gap-1.5 hover:text-blue-600 transition-colors"
+                                >
+                                  <div className="font-medium text-sm truncate">
+                                    {profile.first_name && profile.last_name 
+                                      ? `${profile.first_name} ${profile.last_name}`
+                                      : profile.name || 'Unknown'
+                                    }
+                                  </div>
+                                  <svg
+                                    width="12"
+                                    height="12"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                    className="text-blue-600 flex-shrink-0"
+                                  >
+                                    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                                  </svg>
+                                </a>
+                                {isNewProfile(profile) && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200 flex-shrink-0">
+                                    New
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <div className="font-medium text-sm truncate">
+                                  {profile.first_name && profile.last_name 
+                                    ? `${profile.first_name} ${profile.last_name}`
+                                    : profile.name || 'Unknown'
+                                  }
+                                </div>
+                                {isNewProfile(profile) && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200 flex-shrink-0">
+                                    New
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            
+                            {/* Current Job Title */}
+                            {profile.current_title && (
+                              <div className="text-xs text-gray-600 truncate mt-1">
+                                {profile.current_title}
+                              </div>
+                            )}
+                            
+                            {/* Current Company */}
+                            {profile.current_company && (
+                              <div className="text-xs text-gray-600 truncate mt-0.5">
+                                {profile.company_linkedin_url ? (
+                                  <a
+                                    href={profile.company_linkedin_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-600 hover:text-blue-800 hover:underline"
+                                  >
+                                    {profile.current_company}
+                                  </a>
+                                ) : (
+                                  profile.current_company
+                                )}
+                              </div>
+                            )}
+                            
+                            {/* Location */}
+                            {(profile.city || profile.country) && (
+                              <div className="text-xs text-gray-500 truncate mt-0.5">
+                                📍 {[profile.city, profile.country].filter(Boolean).join(', ')}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -908,6 +1386,14 @@ export default function ProfilesPage() {
                           }
                         </button>
                       </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          {profile.first_seen 
+                            ? new Date(profile.first_seen).toLocaleDateString()
+                            : 'Unknown'
+                          }
+                        </div>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -918,7 +1404,11 @@ export default function ProfilesPage() {
             {!isLoading && filteredProfiles.length > 0 && totalPages > 1 && (
               <div className="flex items-center justify-between px-4 py-3 border-t">
                 <div className="text-sm text-gray-600">
-                  Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of {filteredProfiles.length} profiles
+                  {selectedProfiles.size > 0 ? (
+                    `${selectedProfiles.size} profile${selectedProfiles.size === 1 ? '' : 's'} selected`
+                  ) : (
+                    `Showing ${(currentPage - 1) * itemsPerPage + 1} to ${Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of ${filteredProfiles.length} profiles`
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Button

@@ -144,8 +144,7 @@ export default function PostsPage() {
   const [loadingEngagement, setLoadingEngagement] = useState(false)
   const [sortBy, setSortBy] = useState<'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | null>('posted_at')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
-  const [showNewEngagementOnly, setShowNewEngagementOnly] = useState(false)
-  const [showUnscrapedOnly, setShowUnscrapedOnly] = useState(false)
+  const [showNeedingScrapingOnly, setShowNeedingScrapingOnly] = useState(false)
   const [authorFilter, setAuthorFilter] = useState('')
   const supabase = createClient()
 
@@ -886,15 +885,14 @@ export default function PostsPage() {
     // First apply filters
     let filtered = posts
     
-    // Apply engagement filters
-    if (showNewEngagementOnly) {
+    // Apply scraping filter - show posts that need scraping (either never scraped or need re-scraping)
+    if (showNeedingScrapingOnly) {
       filtered = filtered.filter(post => 
-        post.engagement_needs_scraping === true && 
-        (post.last_reactions_scrape || post.last_comments_scrape)
-      )
-    } else if (showUnscrapedOnly) {
-      filtered = filtered.filter(post => 
-        !post.last_reactions_scrape || !post.last_comments_scrape
+        // Never scraped (missing reactions or comments)
+        (!post.last_reactions_scrape || !post.last_comments_scrape) ||
+        // Needs re-scraping (engagement increased)
+        (post.engagement_needs_scraping === true && 
+         (post.last_reactions_scrape || post.last_comments_scrape))
       )
     }
     
@@ -938,7 +936,18 @@ export default function PostsPage() {
     })
 
     return sorted
-  }, [posts, sortBy, sortOrder, showNewEngagementOnly, showUnscrapedOnly, authorFilter])
+  }, [posts, sortBy, sortOrder, showNeedingScrapingOnly, authorFilter])
+
+  // Count posts needing scraping
+  const postsNeedingScraping = React.useMemo(() => {
+    return posts.filter(post => 
+      // Never scraped (missing reactions or comments)
+      (!post.last_reactions_scrape || !post.last_comments_scrape) ||
+      // Needs re-scraping (engagement increased)
+      (post.engagement_needs_scraping === true && 
+       (post.last_reactions_scrape || post.last_comments_scrape))
+    ).length
+  }, [posts])
 
   // Watch for changes in the textarea to validate in real-time
   const watchedUrls = form.watch('postUrls')
@@ -1309,41 +1318,24 @@ export default function PostsPage() {
                 )}
               </div>
               
-              <button
-                onClick={() => {
-                  setShowUnscrapedOnly(!showUnscrapedOnly)
-                  if (!showUnscrapedOnly) {
-                    setShowNewEngagementOnly(false) // Clear other filter
-                    setAuthorFilter('') // Clear author filter
-                  }
-                }}
-                className={`text-sm cursor-pointer transition-colors border-b border-dotted ${
-                  showUnscrapedOnly 
-                    ? "text-blue-600 border-blue-600" 
-                    : "text-gray-600 hover:text-blue-600 border-gray-400 hover:border-blue-600"
-                }`}
-                title={showUnscrapedOnly ? "Show all posts" : "Show only posts that haven't been fully scraped (missing reactions or comments)"}
-              >
-                {showUnscrapedOnly ? "Show all posts" : "Show unscraped posts"}
-              </button>
-              
-              <button
-                onClick={() => {
-                  setShowNewEngagementOnly(!showNewEngagementOnly)
-                  if (!showNewEngagementOnly) {
-                    setShowUnscrapedOnly(false) // Clear other filter
-                    setAuthorFilter('') // Clear author filter
-                  }
-                }}
-                className={`text-sm cursor-pointer transition-colors border-b border-dotted ${
-                  showNewEngagementOnly 
-                    ? "text-blue-600 border-blue-600" 
-                    : "text-gray-600 hover:text-blue-600 border-gray-400 hover:border-blue-600"
-                }`}
-                title={showNewEngagementOnly ? "Show all posts" : "Show only posts with increased engagement that need re-scraping"}
-              >
-                {showNewEngagementOnly ? "Show all posts" : "Show posts needing re-scrape"}
-              </button>
+              {postsNeedingScraping > 0 && (
+                <button
+                  onClick={() => {
+                    setShowNeedingScrapingOnly(!showNeedingScrapingOnly)
+                    if (!showNeedingScrapingOnly) {
+                      setAuthorFilter('') // Clear author filter
+                    }
+                  }}
+                  className={`text-sm cursor-pointer transition-colors border-b border-dotted whitespace-nowrap ${
+                    showNeedingScrapingOnly 
+                      ? "text-blue-600 border-blue-600" 
+                      : "text-gray-600 hover:text-blue-600 border-gray-400 hover:border-blue-600"
+                  }`}
+                  title={showNeedingScrapingOnly ? "Show all posts" : "Show only posts that need scraping (unscraped or needing re-scraping due to increased engagement)"}
+                >
+                  {showNeedingScrapingOnly ? "Show all posts" : `Show posts needing scraping (${postsNeedingScraping})`}
+                </button>
+              )}
             </div>
           </div>
         )}

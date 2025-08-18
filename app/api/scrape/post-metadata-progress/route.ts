@@ -151,29 +151,26 @@ async function processMetadataScraping(
         try {
           console.log(`Fetching metadata for post ${globalIndex + 1}/${posts.length}: ${post.post_url}`)
           
-          const postDetails = await apifyService.scrapePostDetails([post.post_url])
+          const postDetail = await apifyService.scrapePostDetail(post.post_url)
           
-          if (postDetails.length > 0) {
-            const postDetail = postDetails[0]
-            
-            // Get current engagement stats to detect changes
-            const { data: currentPost } = await supabase
-              .from('posts')
-              .select('num_likes, num_comments, num_shares')
-              .eq('id', post.id)
-              .single()
+          // Get current engagement stats to detect changes
+          const { data: currentPost } = await supabase
+            .from('posts')
+            .select('num_likes, num_comments, num_shares')
+            .eq('id', post.id)
+            .single()
 
-            const current = currentPost ? {
-              num_likes: currentPost.num_likes || 0,
-              num_comments: currentPost.num_comments || 0,
-              num_shares: currentPost.num_shares || 0
-            } : { num_likes: 0, num_comments: 0, num_shares: 0 }
+          const current = currentPost ? {
+            num_likes: currentPost.num_likes || 0,
+            num_comments: currentPost.num_comments || 0,
+            num_shares: currentPost.num_shares || 0
+          } : { num_likes: 0, num_comments: 0, num_shares: 0 }
 
-            const newStats = {
-              num_likes: postDetail.numLikes || 0,
-              num_comments: postDetail.numComments || 0,
-              num_shares: postDetail.numShares || 0
-            }
+          const newStats = {
+            num_likes: postDetail.stats.total_reactions || 0,
+            num_comments: postDetail.stats.comments || 0,
+            num_shares: postDetail.stats.shares || 0
+          }
 
             // Check if engagement changed
             const engagementChanged = 
@@ -183,16 +180,16 @@ async function processMetadataScraping(
 
             // Prepare update data
             const updateData: any = {
-              post_text: postDetail.text,
+              post_text: postDetail.post.text,
               num_likes: newStats.num_likes,
               num_comments: newStats.num_comments,
               num_shares: newStats.num_shares,
-              posted_at_timestamp: postDetail.postedAtTimestamp,
-              posted_at_iso: postDetail.postedAtISO,
-              author_name: postDetail.authorName,
-              author_profile_url: postDetail.authorProfileUrl,
-              author_profile_id: postDetail.authorProfileId,
-              post_type: postDetail.type,
+              posted_at_timestamp: postDetail.post.created_at.timestamp,
+              posted_at_iso: postDetail.post.created_at.date,
+              author_name: postDetail.author.name,
+              author_profile_url: postDetail.author.profile_url,
+              author_profile_id: postDetail.author.profile_url, // Use profile URL as ID for now
+              post_type: postDetail.post.type,
               scraped_at: new Date().toISOString()
             }
 
@@ -220,15 +217,6 @@ async function processMetadataScraping(
                 engagementChanged
               }
             }
-          } else {
-            console.log(`No metadata found for post: ${post.post_url}`)
-            return {
-              postId: post.id,
-              postUrl: post.post_url,
-              updated: false,
-              engagementChanged: false
-            }
-          }
 
         } catch (error) {
           console.error(`Error fetching metadata for post ${post.id}:`, error)

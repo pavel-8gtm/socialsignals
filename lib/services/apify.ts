@@ -120,6 +120,77 @@ export interface ScrapeCommentsParams {
   pageNumber?: number
 }
 
+// Types for LinkedIn Profile Enrichment
+export interface ApifyProfileEnrichmentData {
+  basic_info: {
+    fullname: string
+    first_name: string
+    last_name: string
+    headline: string
+    public_identifier: string
+    profile_picture_url: string
+    about: string
+    location: {
+      country: string
+      city: string
+      full: string
+      country_code: string
+    }
+    urn: string
+    follower_count: number
+    connection_count: number
+    current_company: string
+    current_company_urn: string
+    current_company_url: string
+    email: string | null
+  }
+  experience: Array<{
+    title: string
+    company: string
+    location: string
+    description: string
+    duration: string
+    start_date: {
+      year: number
+      month: string
+    }
+    end_date?: {
+      year: number
+      month: string
+    }
+    is_current: boolean
+    company_linkedin_url: string
+    company_logo_url: string
+    company_id: string
+  }>
+  education: Array<{
+    school: string
+    degree: string
+    degree_name: string
+    field_of_study?: string
+    duration: string
+    school_linkedin_url: string
+    school_logo_url: string
+    start_date: {
+      year: number
+    }
+    end_date: {
+      year: number
+    }
+    school_id: string
+  }>
+  languages: Array<{
+    language: string
+    proficiency: string
+  }>
+  profileUrl: string
+}
+
+export interface EnrichProfilesParams {
+  profileIdentifiers: string[] // LinkedIn profile identifiers (not full URLs)
+  includeEmail?: boolean
+}
+
 // Types for LinkedIn Profile Posts scraper (based on instructions.md)
 export interface ApifyProfilePostData {
   type: string
@@ -573,6 +644,96 @@ export class ApifyService {
       console.error('Error getting run status:', error)
       throw error
     }
+  }
+
+  /**
+   * Enrich LinkedIn profiles using the LinkedIn Profile Enrichment actor
+   * Batches up to 100 profiles per run for efficiency
+   */
+  async enrichProfiles(params: EnrichProfilesParams): Promise<ApifyProfileEnrichmentData[]> {
+    const input = {
+      includeEmail: params.includeEmail || false,
+      usernames: params.profileIdentifiers
+    }
+
+    try {
+      const run = await this.client.actor('GOvL4O4RwFqsdIqXF').start({
+        ...input,
+        memoryMbytes: 1024,
+        timeoutSecs: 300
+      })
+
+      await this.client.run(run.id).waitForFinish()
+      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
+
+      return items as ApifyProfileEnrichmentData[]
+    } catch (error) {
+      console.error('Error enriching profiles:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Process multiple batches of profile enrichment concurrently
+   * Handles batching (50 profiles per run) and concurrency (32 concurrent runs)
+   */
+  async enrichAllProfiles(
+    profileIdentifiers: string[], 
+    includeEmail: boolean = false,
+    onProgress?: (current: number, total: number, message: string) => void
+  ): Promise<ApifyProfileEnrichmentData[]> {
+    const BATCH_SIZE = 50
+    const MAX_CONCURRENT = 32
+
+    // Split profile identifiers into batches
+    const batches: string[][] = []
+    for (let i = 0; i < profileIdentifiers.length; i += BATCH_SIZE) {
+      batches.push(profileIdentifiers.slice(i, i + BATCH_SIZE))
+    }
+
+    console.log(`🐛 DEBUG: Enriching ${profileIdentifiers.length} profiles in ${batches.length} batches`)
+
+    const allEnrichedProfiles: ApifyProfileEnrichmentData[] = []
+    let processedBatches = 0
+
+    // Process batches in chunks of MAX_CONCURRENT
+    for (let i = 0; i < batches.length; i += MAX_CONCURRENT) {
+      const currentBatches = batches.slice(i, i + MAX_CONCURRENT)
+      
+      onProgress?.(
+        processedBatches, 
+        batches.length, 
+        `Processing batches ${i + 1}-${Math.min(i + MAX_CONCURRENT, batches.length)} of ${batches.length}...`
+      )
+
+      // Process current batch chunk concurrently
+      const batchPromises = currentBatches.map(async (batch) => {
+        try {
+          return await this.enrichProfiles({
+            profileIdentifiers: batch,
+            includeEmail
+          })
+        } catch (error) {
+          console.error('Batch enrichment failed:', error)
+          return [] // Return empty array for failed batches
+        }
+      })
+
+      const results = await Promise.allSettled(batchPromises)
+      
+      // Collect successful results
+      results.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          allEnrichedProfiles.push(...result.value)
+        }
+      })
+
+      processedBatches += currentBatches.length
+    }
+
+    console.log(`🐛 DEBUG: Profile enrichment complete: ${allEnrichedProfiles.length} profiles enriched`)
+
+    return allEnrichedProfiles
   }
 }
 
