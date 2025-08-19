@@ -103,6 +103,7 @@ async function processEnrichment(
     const profiles = allProfiles
 
     // Validate that these profiles actually belong to this user by checking reactions/comments
+    console.log(`🔍 VALIDATION SETUP: Checking profiles for user ${userId}`)
     const { data: userPosts, error: userPostsError } = await supabase
       .from('posts')
       .select('id')
@@ -113,6 +114,8 @@ async function processEnrichment(
     }
 
     const userPostIds = userPosts.map(p => p.id)
+    console.log(`  User has ${userPostIds.length} posts to validate against`)
+    console.log(`  Sample user post IDs:`, userPostIds.slice(0, 3))
 
     // Try to validate profiles, but continue if validation fails
     let userProfiles = profiles
@@ -125,6 +128,8 @@ async function processEnrichment(
       
       for (let i = 0; i < profileIds.length; i += CHUNK_SIZE) {
         const chunk = profileIds.slice(i, i + CHUNK_SIZE)
+        console.log(`🔍 Validating chunk ${Math.floor(i/CHUNK_SIZE) + 1}: ${chunk.length} profile IDs (from ${i} to ${i + chunk.length - 1})`)
+        console.log(`  Sample chunk IDs:`, chunk.slice(0, 3))
         
         try {
           // Check reactions for this chunk
@@ -136,6 +141,11 @@ async function processEnrichment(
 
           if (!validationError && validProfiles) {
             allValidReactions.push(...validProfiles)
+            console.log(`  ✅ Found ${validProfiles.length} valid reactions in chunk`)
+          } else if (validationError) {
+            console.log(`  ❌ Reactions validation error for chunk:`, validationError)
+          } else {
+            console.log(`  ⚪ No reactions found for chunk`)
           }
 
           // Check comments for this chunk
@@ -147,6 +157,11 @@ async function processEnrichment(
 
           if (!commentValidationError && validCommentProfiles) {
             allValidComments.push(...validCommentProfiles)
+            console.log(`  ✅ Found ${validCommentProfiles.length} valid comments in chunk`)
+          } else if (commentValidationError) {
+            console.log(`  ❌ Comments validation error for chunk:`, commentValidationError)
+          } else {
+            console.log(`  ⚪ No comments found for chunk`)
           }
         } catch (chunkError) {
           console.warn(`Chunk validation failed, continuing anyway:`, chunkError)
@@ -160,6 +175,25 @@ async function processEnrichment(
           ...(allValidComments?.map(c => c.commenter_profile_id) || [])
         ])
         userProfiles = profiles.filter(p => validProfileIds.has(p.id))
+        
+        console.log(`🐛 VALIDATION DEBUG:`)
+        console.log(`  - Valid reactions found: ${allValidReactions.length}`)
+        console.log(`  - Valid comments found: ${allValidComments.length}`)
+        console.log(`  - Unique valid profile IDs: ${validProfileIds.size}`)
+        console.log(`  - Profiles that passed validation: ${userProfiles.length}`)
+        console.log(`  - User has ${userPostIds.length} posts`)
+        
+        // Show which specific profiles were filtered out
+        const rejectedProfiles = profiles.filter(p => !validProfileIds.has(p.id))
+        console.log(`  - ${rejectedProfiles.length} profiles rejected by validation`)
+        if (rejectedProfiles.length > 0) {
+          console.log(`  - Sample rejected profiles:`, rejectedProfiles.slice(0, 5).map(p => ({ 
+            id: p.id, 
+            name: p.name, 
+            urn: p.urn 
+          })))
+        }
+        
         console.log(`Profile validation successful: ${userProfiles.length} valid profiles found`)
       } else {
         console.log(`Profile validation returned no results, using all ${profiles.length} selected profiles`)
@@ -173,15 +207,42 @@ async function processEnrichment(
       throw new Error('No profiles provided for enrichment')
     }
 
+    // Filter out company profiles first (they can't be enriched by LinkedIn Profile Enrichment)
+    const individualProfiles = userProfiles.filter(p => {
+      // Skip profiles that are companies (have /company/ in URL)
+      if (p.profile_url && p.profile_url.includes('/company/')) {
+        return false
+      }
+      // Skip profiles that have company-like URNs
+      if (p.urn && p.urn.includes('/company/')) {
+        return false
+      }
+      return true
+    })
+    
+    const companyProfilesFiltered = userProfiles.length - individualProfiles.length
+    if (companyProfilesFiltered > 0) {
+      console.log(`🏢 Filtered out ${companyProfilesFiltered} company profiles (can't enrich companies)`)
+    }
+
     // Extract profile identifiers for Apify (not full URLs, just the ID part)
-    const profileIdentifiers = userProfiles
+    const profileIdentifiers = individualProfiles
       .map(p => {
-        if (!p.profile_url) return null
-        // Extract the identifier from LinkedIn URL
-        // From: "https://www.linkedin.com/in/ACoAAAK4z84B7h32wBsGI7TPe4819oXV20i8GaA"
-        // To: "ACoAAAK4z84B7h32wBsGI7TPe4819oXV20i8GaA"
-        const match = p.profile_url.match(/\/in\/([^\/\?]+)/)
-        return match ? match[1] : null
+        // Try profile_url first
+        if (p.profile_url) {
+          // Extract the identifier from LinkedIn URL
+          // From: "https://www.linkedin.com/in/ACoAAAK4z84B7h32wBsGI7TPe4819oXV20i8GaA"
+          // To: "ACoAAAK4z84B7h32wBsGI7TPe4819oXV20i8GaA"
+          const match = p.profile_url.match(/\/in\/([^\/\?]+)/)
+          if (match) return match[1]
+        }
+        
+        // Fallback to URN if it looks like a LinkedIn identifier
+        if (p.urn && p.urn.length > 3 && !p.urn.startsWith('http')) {
+          return p.urn
+        }
+        
+        return null
       })
       .filter(id => id !== null) as string[]
 
@@ -189,7 +250,49 @@ async function processEnrichment(
       throw new Error('No valid profile identifiers found')
     }
 
-    console.log(`Extracted ${profileIdentifiers.length} profile identifiers:`, profileIdentifiers.slice(0, 5))
+    console.log(`🐛 DEBUG ENRICHMENT FILTERING:`)
+    console.log(`  - Started with ${profileIds.length} selected profile IDs`)
+    console.log(`  - Fetched ${profiles.length} profiles from database`)
+    console.log(`  - After validation: ${userProfiles.length} user profiles`)
+    console.log(`  - After URL extraction: ${profileIdentifiers.length} valid identifiers`)
+    console.log(`  - Sample identifiers:`, profileIdentifiers.slice(0, 5))
+    
+    // Log profiles that got filtered out
+    const profilesWithValidUrls = individualProfiles.filter(p => {
+      if (p.profile_url) {
+        const match = p.profile_url.match(/\/in\/([^\/\?]+)/)
+        return !!match
+      }
+      return false
+    })
+    
+    const profilesUsingUrnFallback = individualProfiles.filter(p => {
+      if (p.profile_url) return false // Already has URL
+      return p.urn && p.urn.length > 3 && !p.urn.startsWith('http')
+    })
+    
+    const profilesCompletelyFiltered = individualProfiles.filter(p => {
+      // Check if profile would be completely filtered out
+      if (p.profile_url) {
+        const match = p.profile_url.match(/\/in\/([^\/\?]+)/)
+        if (match) return false
+      }
+      if (p.urn && p.urn.length > 3 && !p.urn.startsWith('http')) {
+        return false
+      }
+      return true
+    })
+    
+    console.log(`  - ${profilesWithValidUrls.length} profiles using profile_url`)
+    console.log(`  - ${profilesUsingUrnFallback.length} profiles using URN fallback`)
+    console.log(`  - ${profilesCompletelyFiltered.length} profiles completely filtered out`)
+    
+    if (profilesUsingUrnFallback.length > 0) {
+      console.log(`  - Sample URN fallbacks:`, profilesUsingUrnFallback.slice(0, 3).map(p => ({ id: p.id, name: p.name, urn: p.urn })))
+    }
+    if (profilesCompletelyFiltered.length > 0) {
+      console.log(`  - Sample filtered profiles:`, profilesCompletelyFiltered.slice(0, 3).map(p => ({ id: p.id, name: p.name, urn: p.urn, profile_url: p.profile_url })))
+    }
 
     // Calculate optimal batch strategy
     const BATCH_SIZE = 50
@@ -268,7 +371,8 @@ async function processEnrichment(
           public_identifier: basicInfo.public_identifier || null,
           primary_identifier: basicInfo.urn || null,
           secondary_identifier: basicInfo.public_identifier || enrichedProfile.profileUrl || null,
-          enriched_at: new Date().toISOString()
+          enriched_at: new Date().toISOString(),
+          last_enriched_at: new Date().toISOString()
         }
 
         // Update profile using comprehensive matching strategies
@@ -409,59 +513,129 @@ async function handleProfileUnification(
       totalProfiles: enrichedProfiles.length
     })}\n\n`))
 
-    // Find potential duplicates by matching public_identifier with URNs
+    // Find potential duplicates by matching public_identifier, secondary_identifier, and URNs
     for (const enrichedProfile of enrichedProfiles) {
       const basicInfo = enrichedProfile.basic_info || {}
       const { public_identifier, urn } = basicInfo
 
       if (!public_identifier) continue
 
-      // Look for profiles with same public_identifier but different URN
+      console.log(`🔍 Checking for duplicates of enriched profile: ${public_identifier} (URN: ${urn})`)
+
+      // Look for profiles that could be duplicates based on multiple criteria
       const { data: duplicates, error } = await supabase
         .from('profiles')
-        .select('id, urn, public_identifier, first_seen')
-        .or(`public_identifier.eq.${public_identifier},urn.eq.${urn}`)
+        .select('id, urn, public_identifier, secondary_identifier, primary_identifier, first_seen, name')
+        .or(`public_identifier.eq.${public_identifier},secondary_identifier.eq.${public_identifier},urn.eq.${public_identifier},urn.eq.${urn}`)
 
-      if (error || !duplicates || duplicates.length <= 1) continue
+      if (error) {
+        console.error('Error finding duplicates:', error)
+        continue
+      }
 
-      // Group by public_identifier/name to find true duplicates
+      if (!duplicates || duplicates.length <= 1) {
+        console.log(`✅ No duplicates found for ${public_identifier}`)
+        continue
+      }
+
+      console.log(`🔍 Found ${duplicates.length} potential duplicates for ${public_identifier}:`, duplicates.map(d => ({ id: d.id, urn: d.urn, public_identifier: d.public_identifier, secondary_identifier: d.secondary_identifier })))
+
+      // Group profiles that represent the same person
       const duplicateGroups = new Map<string, typeof duplicates>()
       
       duplicates.forEach(profile => {
-        const key = profile.public_identifier || profile.urn
+        // Use public_identifier as the primary key, fallback to secondary_identifier or urn
+        const key = profile.public_identifier || profile.secondary_identifier || profile.urn
         if (!duplicateGroups.has(key)) {
           duplicateGroups.set(key, [])
         }
         duplicateGroups.get(key)?.push(profile)
       })
 
-      // Merge duplicates (keep oldest, update references, delete newer)
+      // Also check for cross-identifier matches (e.g., one has public_identifier='x', other has urn='x')
+      const allProfiles = duplicates
+      for (let i = 0; i < allProfiles.length; i++) {
+        for (let j = i + 1; j < allProfiles.length; j++) {
+          const profile1 = allProfiles[i]
+          const profile2 = allProfiles[j]
+          
+          // Check if they represent the same person with different identifiers
+          const identifiers1 = [profile1.public_identifier, profile1.secondary_identifier, profile1.urn].filter(Boolean)
+          const identifiers2 = [profile2.public_identifier, profile2.secondary_identifier, profile2.urn].filter(Boolean)
+          
+          const hasMatchingIdentifier = identifiers1.some(id1 => identifiers2.includes(id1))
+          
+          if (hasMatchingIdentifier) {
+            // Merge them into the same group (use the key from the enriched profile)
+            const groupKey = public_identifier
+            if (!duplicateGroups.has(groupKey)) {
+              duplicateGroups.set(groupKey, [])
+            }
+            const group = duplicateGroups.get(groupKey)!
+            if (!group.find(p => p.id === profile1.id)) group.push(profile1)
+            if (!group.find(p => p.id === profile2.id)) group.push(profile2)
+          }
+        }
+      }
+
+      // Merge duplicates (prefer enriched profiles, then oldest)
       for (const [key, profileGroup] of duplicateGroups) {
         if (profileGroup.length > 1) {
-          // Sort by first_seen (oldest first)
-          profileGroup.sort((a, b) => new Date(a.first_seen).getTime() - new Date(b.first_seen).getTime())
+          console.log(`🔄 Merging ${profileGroup.length} duplicate profiles for ${key}`)
+          
+          // Sort by enrichment status (enriched first), then by first_seen (oldest first)
+          profileGroup.sort((a, b) => {
+            // Prefer profiles with public_identifier (enriched)
+            const aEnriched = !!a.public_identifier
+            const bEnriched = !!b.public_identifier
+            if (aEnriched !== bEnriched) return bEnriched ? 1 : -1
+            
+            // Then prefer older profiles
+            return new Date(a.first_seen).getTime() - new Date(b.first_seen).getTime()
+          })
           
           const keeperId = profileGroup[0].id
           const duplicateIds = profileGroup.slice(1).map(p => p.id)
 
+          console.log(`📌 Keeping profile ${keeperId}, merging: ${duplicateIds.join(', ')}`)
+
+          // Store alternative URNs before deleting
+          for (const duplicate of profileGroup.slice(1)) {
+            if (duplicate.urn && duplicate.urn !== profileGroup[0].urn) {
+              try {
+                await supabase.rpc('add_alternative_urn', {
+                  new_urn: duplicate.urn,
+                  profile_id: keeperId
+                })
+                console.log(`✅ Stored alternative URN: ${duplicate.urn} for profile ${keeperId}`)
+              } catch (urnError) {
+                console.error('Error storing alternative URN:', urnError)
+              }
+            }
+          }
+
           // Update reactions and comments to point to keeper
-          await supabase
+          const { error: reactionsError } = await supabase
             .from('reactions')
             .update({ reactor_profile_id: keeperId })
             .in('reactor_profile_id', duplicateIds)
 
-          await supabase
+          const { error: commentsError } = await supabase
             .from('comments')
             .update({ commenter_profile_id: keeperId })
             .in('commenter_profile_id', duplicateIds)
 
           // Delete duplicate profiles
-          await supabase
+          const { error: deleteError } = await supabase
             .from('profiles')
             .delete()
             .in('id', duplicateIds)
 
-          console.log(`Merged ${duplicateIds.length} duplicates for ${key}`)
+          if (reactionsError || commentsError || deleteError) {
+            console.error('Error during merge:', { reactionsError, commentsError, deleteError })
+          } else {
+            console.log(`✅ Successfully merged ${duplicateIds.length} duplicates for ${key}`)
+          }
         }
       }
     }

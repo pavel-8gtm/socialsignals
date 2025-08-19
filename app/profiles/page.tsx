@@ -65,7 +65,7 @@ export default function ProfilesPage() {
   const [itemsPerPage] = useState(100)
   const [user, setUser] = useState<any>(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'location' | 'company'>('latest_post')
+  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company'>('latest_post')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [showNewProfilesOnly, setShowNewProfilesOnly] = useState(false)
   const [showNeedsEnrichmentOnly, setShowNeedsEnrichmentOnly] = useState(false)
@@ -131,11 +131,14 @@ export default function ProfilesPage() {
     // Prepare data for clipboard in tab-separated format (TSV)
     const headers = [
       'Name',
+      'First Name',
+      'Last Name',
       'Headline', 
       'Profile URL',
       'URN',
       'First Seen',
       'Last Updated',
+      'Last Enriched',
       'Total Reactions',
       'Total Comments',
       'Posts Engaged With',
@@ -143,7 +146,9 @@ export default function ProfilesPage() {
       'Last Engaged Post Date',
       'Current Title',
       'Current Company',
-      'Location',
+      'Company LinkedIn URL',
+      'City',
+      'Country',
       'Profile Picture URL'
     ]
     
@@ -151,11 +156,14 @@ export default function ProfilesPage() {
       profile.first_name && profile.last_name 
         ? `${profile.first_name} ${profile.last_name}`
         : profile.name || '',
+      profile.first_name || '',
+      profile.last_name || '',
       profile.headline || '',
       profile.profile_url || '',
       profile.urn || '',
       profile.first_seen ? new Date(profile.first_seen).toLocaleDateString() : '',
       profile.last_updated ? new Date(profile.last_updated).toLocaleDateString() : '',
+      profile.last_enriched_at ? new Date(profile.last_enriched_at).toLocaleDateString() : '',
       String(profile.total_reactions || 0),
       String(profile.total_comments || 0),
       String(profile.posts_engaged_with || 0),
@@ -163,7 +171,9 @@ export default function ProfilesPage() {
       profile.latest_post_date ? new Date(profile.latest_post_date).toLocaleDateString() : '',
       profile.current_title || '',
       profile.current_company || '',
-      [profile.city, profile.country].filter(Boolean).join(', ') || '',
+      profile.company_linkedin_url || '',
+      profile.city || '',
+      profile.country || '',
       profile.profile_picture_url || profile.profile_pictures?.small || ''
     ])
 
@@ -201,11 +211,14 @@ export default function ProfilesPage() {
         'Name': profile.first_name && profile.last_name 
           ? `${profile.first_name} ${profile.last_name}`
           : profile.name || '',
+        'First Name': profile.first_name || '',
+        'Last Name': profile.last_name || '',
         'Headline': profile.headline || '',
         'Profile URL': profile.profile_url || '',
         'URN': profile.urn || '',
         'First Seen': profile.first_seen ? new Date(profile.first_seen).toLocaleDateString() : '',
         'Last Updated': profile.last_updated ? new Date(profile.last_updated).toLocaleDateString() : '',
+        'Last Enriched': profile.last_enriched_at ? new Date(profile.last_enriched_at).toLocaleDateString() : '',
         'Total Reactions': profile.total_reactions || 0,
         'Total Comments': profile.total_comments || 0,
         'Posts Engaged With': profile.posts_engaged_with || 0,
@@ -213,7 +226,9 @@ export default function ProfilesPage() {
         'Last Engaged Post Date': profile.latest_post_date ? new Date(profile.latest_post_date).toLocaleDateString() : '',
         'Current Title': profile.current_title || '',
         'Current Company': profile.current_company || '',
-        'Location': [profile.city, profile.country].filter(Boolean).join(', ') || '',
+        'Company LinkedIn URL': profile.company_linkedin_url || '',
+        'City': profile.city || '',
+        'Country': profile.country || '',
         'Profile Picture URL': profile.profile_picture_url || ''
       }
     })
@@ -336,7 +351,8 @@ export default function ProfilesPage() {
             public_identifier,
             primary_identifier,
             secondary_identifier,
-            enriched_at
+            enriched_at,
+            last_enriched_at
             )
           )
         `)
@@ -383,7 +399,8 @@ export default function ProfilesPage() {
               public_identifier,
               primary_identifier,
               secondary_identifier,
-              enriched_at
+              enriched_at,
+              last_enriched_at
             )
           )
         `)
@@ -574,7 +591,7 @@ export default function ProfilesPage() {
     }
   }
 
-  const handleSort = (column: 'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'location' | 'company') => {
+  const handleSort = (column: 'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company') => {
     if (sortBy === column) {
       // Toggle sort order if clicking the same column
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
@@ -815,6 +832,8 @@ export default function ProfilesPage() {
         return profile.latest_post_date ? new Date(profile.latest_post_date).getTime() : 0
       case 'first_seen':
         return profile.first_seen ? new Date(profile.first_seen).getTime() : 0
+      case 'last_enriched_at':
+        return profile.last_enriched_at ? new Date(profile.last_enriched_at).getTime() : 0
       case 'location':
         return [profile.city, profile.country].filter(Boolean).join(', ').toLowerCase()
       case 'company':
@@ -1239,6 +1258,19 @@ export default function ProfilesPage() {
                         )}
                       </div>
                     </TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('last_enriched_at')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Last Enriched
+                        {sortBy === 'last_enriched_at' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1391,6 +1423,14 @@ export default function ProfilesPage() {
                           {profile.first_seen 
                             ? new Date(profile.first_seen).toLocaleDateString()
                             : 'Unknown'
+                          }
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          {profile.last_enriched_at 
+                            ? new Date(profile.last_enriched_at).toLocaleDateString()
+                            : 'Never'
                           }
                         </div>
                       </TableCell>

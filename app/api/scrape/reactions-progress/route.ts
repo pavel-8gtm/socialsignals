@@ -6,6 +6,517 @@ import type { Database } from '@/lib/types/database.types'
 type Profile = Database['public']['Tables']['profiles']['Insert']
 type Reaction = Database['public']['Tables']['reactions']['Insert']
 
+// Helper function to extract identifiers from LinkedIn profile data
+function extractProfileIdentifiers(reactor: any) {
+  let primary_identifier = null
+  let secondary_identifier = null
+  
+  // Primary identifier is the URN (internal LinkedIn ID)
+  if (reactor.urn && reactor.urn.startsWith('ACoA')) {
+    primary_identifier = reactor.urn
+  }
+  
+  // Secondary identifier is the vanity URL part
+  if (reactor.profile_url) {
+    const match = reactor.profile_url.match(/\/in\/([^\/\?]+)/)
+    if (match && match[1]) {
+      secondary_identifier = match[1]
+      
+      // If we don't have a primary identifier, try to use the URN if it looks like an internal ID
+      if (!primary_identifier && reactor.urn && reactor.urn.startsWith('ACoA')) {
+        primary_identifier = reactor.urn
+      }
+    }
+  }
+  
+  // Fallback: if URN is a vanity URL, use it as secondary
+  if (!secondary_identifier && reactor.urn && !reactor.urn.startsWith('ACoA') && !reactor.urn.startsWith('http')) {
+    secondary_identifier = reactor.urn
+  }
+  
+  return { primary_identifier, secondary_identifier }
+}
+
+// Sophisticated profile upsert function using dual identifier system
+async function upsertProfilesWithDualIdentifiers(supabase: any, profiles: any[]) {
+  const results = []
+  const newlyUpsertedIds = []
+  
+  for (const reactor of profiles) {
+    const { primary_identifier, secondary_identifier } = extractProfileIdentifiers(reactor)
+    
+    const profileData = {
+      urn: reactor.urn,
+      name: reactor.name,
+      headline: reactor.headline,
+      profile_url: reactor.profile_url,
+      profile_pictures: reactor.profile_pictures,
+      primary_identifier,
+      secondary_identifier
+    }
+    
+    // Try to find existing profile using multiple strategies
+    let existingProfile = null
+    
+    // Strategy 1: Match by primary_identifier (URN)
+    if (primary_identifier) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, urn, primary_identifier, secondary_identifier, first_name')
+        .eq('primary_identifier', primary_identifier)
+        .single()
+      
+      if (data) {
+        existingProfile = data
+      }
+    }
+    
+    // Strategy 2: Match by secondary_identifier (vanity URL)
+    if (!existingProfile && secondary_identifier) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, urn, primary_identifier, secondary_identifier, first_name')
+        .eq('secondary_identifier', secondary_identifier)
+        .single()
+      
+      if (data) {
+        existingProfile = data
+      }
+    }
+    
+    // Strategy 3: Match by old urn field (for backwards compatibility)
+    if (!existingProfile) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, urn, primary_identifier, secondary_identifier, first_name')
+        .eq('urn', reactor.urn)
+        .single()
+      
+      if (data) {
+        existingProfile = data
+      }
+    }
+    
+    // Strategy 4: Match by profile_url pattern
+    if (!existingProfile && secondary_identifier) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, urn, primary_identifier, secondary_identifier, first_name')
+        .ilike('profile_url', `%${secondary_identifier}%`)
+        .single()
+      
+      if (data) {
+        existingProfile = data
+      }
+    }
+    
+    // Strategy 5: Match by name + headline (for edge cases with completely different identifiers)
+    if (!existingProfile && reactor.name && reactor.headline) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, urn, primary_identifier, secondary_identifier, first_name')
+        .eq('name', reactor.name.trim())
+        .eq('headline', reactor.headline.trim())
+        .single()
+      
+      if (data) {
+        existingProfile = data
+        console.log(`📎 Found existing profile via name+headline match: ${reactor.name}`)
+      }
+    }
+    
+    if (existingProfile) {
+      // Check if this existing profile needs enrichment (missing first_name)
+      const needsEnrichment = !existingProfile.first_name || existingProfile.first_name.trim() === ''
+      
+      // PRESERVE ORIGINAL URN - don't overwrite if it exists and is different
+      // This prevents losing track of reactions/comments linked to different URN formats
+      let preservedUrn = existingProfile.urn
+      if (!preservedUrn || preservedUrn.trim() === '') {
+        preservedUrn = reactor.urn
+      } else if (preservedUrn !== reactor.urn && reactor.urn && reactor.urn.trim() !== '') {
+        // Different URN detected - log this for visibility
+        console.log(`⚠️  Different URN detected for ${reactor.name}: existing="${preservedUrn}" vs new="${reactor.urn}" - preserving original`)
+      }
+      
+      // Update existing profile with new data but preserve original URN
+      const updateData = {
+        urn: preservedUrn, // Preserve original URN
+        name: reactor.name,
+        headline: reactor.headline,
+        profile_url: reactor.profile_url,
+        profile_pictures: reactor.profile_pictures,
+        last_updated: new Date().toISOString()
+      }
+      
+      // Update identifiers - add new ones if missing, but don't overwrite existing ones
+      if (!existingProfile.primary_identifier && primary_identifier) {
+        updateData.primary_identifier = primary_identifier
+      }
+      if (!existingProfile.secondary_identifier && secondary_identifier) {
+        updateData.secondary_identifier = secondary_identifier
+      }
+      
+      // If we have a different URN format, try to store it in the appropriate identifier field
+      if (reactor.urn && reactor.urn !== preservedUrn) {
+        const newPrimaryId = primary_identifier
+        const newSecondaryId = secondary_identifier
+        
+        // If the new URN would fit in primary_identifier and that field is empty
+        if (!existingProfile.primary_identifier && newPrimaryId && newPrimaryId !== existingProfile.secondary_identifier) {
+          updateData.primary_identifier = newPrimaryId
+          console.log(`📝 Storing new URN format in primary_identifier: ${newPrimaryId}`)
+        }
+        // If the new URN would fit in secondary_identifier and that field is empty  
+        else if (!existingProfile.secondary_identifier && newSecondaryId && newSecondaryId !== existingProfile.primary_identifier) {
+          updateData.secondary_identifier = newSecondaryId
+          console.log(`📝 Storing new URN format in secondary_identifier: ${newSecondaryId}`)
+        }
+        // As a fallback, store the different URN format in alternative_urns array
+        else {
+          // We'll call a separate function after the main update to add alternative URN
+          console.log(`📝 Will store new URN format as alternative: ${reactor.urn}`)
+        }
+      }
+      
+      const { data: updatedData, error } = await supabase
+        .from('profiles')
+        .update(updateData)
+        .eq('id', existingProfile.id)
+        .select('id, urn')
+        .single()
+      
+      if (!error && updatedData) {
+        // If we have a different URN that couldn't be stored in primary/secondary identifiers,
+        // store it as an alternative URN
+        if (reactor.urn && reactor.urn !== preservedUrn && 
+            !updateData.primary_identifier && !updateData.secondary_identifier) {
+          try {
+            await supabase.rpc('add_alternative_urn', {
+              profile_id: existingProfile.id,
+              new_urn: reactor.urn
+            })
+            console.log(`✅ Stored alternative URN for ${reactor.name}: ${reactor.urn}`)
+          } catch (altUrnError) {
+            console.error('Error storing alternative URN:', altUrnError)
+          }
+        }
+        
+        results.push(updatedData)
+        // If profile needs enrichment, add to newly upserted list
+        if (needsEnrichment) {
+          newlyUpsertedIds.push(updatedData.id)
+        }
+      } else {
+        console.error('Error updating existing profile:', error)
+      }
+    } else {
+      // Create new profile
+      const { data: newData, error } = await supabase
+        .from('profiles')
+        .insert(profileData)
+        .select('id, urn')
+        .single()
+      
+      if (!error && newData) {
+        results.push(newData)
+        // New profiles always need enrichment
+        newlyUpsertedIds.push(newData.id)
+      } else {
+        console.error('Error creating new profile:', error)
+      }
+    }
+  }
+  
+  return { profiles: results, newlyUpsertedIds }
+}
+
+// Auto-enrichment function for newly discovered profiles
+async function autoEnrichProfiles(supabase: any, userId: string, progressId: string, newlyUpsertedProfileIds: string[]) {
+  console.log(`🔍 Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`)
+  
+      // Update progress to show we're checking for enrichment
+    const currentProgress = progressStore.get(progressId)
+    if (currentProgress) {
+      progressStore.set(progressId, {
+        ...currentProgress,
+        currentStep: `Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`,
+        progress: 91,
+        totalItems: newlyUpsertedProfileIds.length, // Set total for progress tracking
+        processedItems: 0 // Reset processed count
+      })
+    }
+  
+  if (!newlyUpsertedProfileIds || newlyUpsertedProfileIds.length === 0) {
+    console.log('✅ No new profiles discovered in this scraping session')
+    
+    // Update progress to show no new profiles
+    if (currentProgress) {
+      progressStore.set(progressId, {
+        ...currentProgress,
+        currentStep: 'No new profiles discovered • Finishing up...',
+        progress: 98
+      })
+    }
+    
+    return { enrichedCount: 0, skipped: false }
+  }
+  
+  // Find profiles that need enrichment among the newly discovered ones
+  const { data: profilesToEnrich, error: profilesError } = await supabase
+    .from('profiles')
+    .select('id, profile_url, first_name, enriched_at')
+    .in('id', newlyUpsertedProfileIds) // Only check the newly discovered profiles
+    .or('first_name.is.null,first_name.eq.')
+    .not('profile_url', 'ilike', '%/company/%') // Exclude company profiles
+  
+  if (profilesError) {
+    console.error('Error fetching profiles for auto-enrichment:', profilesError)
+    return { enrichedCount: 0, skipped: false, error: profilesError.message }
+  }
+  
+  if (!profilesToEnrich || profilesToEnrich.length === 0) {
+    console.log('✅ No profiles need enrichment')
+    
+    // Update progress to show no enrichment needed
+    if (currentProgress) {
+      progressStore.set(progressId, {
+        ...currentProgress,
+        currentStep: 'Checked for enrichment: 0 profiles need enrichment • Finishing up...',
+        progress: 98
+      })
+    }
+    
+    return { enrichedCount: 0, skipped: false }
+  }
+  
+  console.log(`🚀 Auto-enriching ${profilesToEnrich.length} profiles...`)
+  
+  // Update progress to show enrichment is starting with profile count
+  if (currentProgress) {
+    progressStore.set(progressId, {
+      ...currentProgress,
+      currentStep: `Found ${profilesToEnrich.length} profiles needing enrichment • Preparing for LinkedIn Profile Enrichment...`,
+      progress: 92,
+      totalItems: profilesToEnrich.length, // Update total to profiles that actually need enrichment
+      processedItems: 0 // Reset processed count
+    })
+  }
+  
+  // Get user's Apify API key
+  const { data: userSettings, error: settingsError } = await supabase
+    .from('user_settings')
+    .select('apify_api_key')
+    .eq('user_id', userId)
+    .single()
+
+  if (settingsError || !userSettings?.apify_api_key) {
+    console.warn('No Apify API key found for auto-enrichment')
+    
+    // Update progress to show enrichment skipped
+    if (currentProgress) {
+      progressStore.set(progressId, {
+        ...currentProgress,
+        currentStep: 'Auto-enrichment skipped (no API key) • Finishing up...',
+        progress: 98
+      })
+    }
+    
+    return { enrichedCount: 0, skipped: true, error: 'No Apify API key found' }
+  }
+  
+  try {
+    // Initialize Apify service
+    const apifyService = new ApifyService(userSettings.apify_api_key)
+    
+    // Extract profile identifiers from URLs
+    const profileIdentifiers = profilesToEnrich.map(profile => {
+      const match = profile.profile_url?.match(/\/in\/([^\/\?]+)/)
+      return match ? match[1] : profile.profile_url
+    }).filter(Boolean)
+    
+    if (profileIdentifiers.length === 0) {
+      console.warn('No valid profile identifiers found for enrichment')
+      return { enrichedCount: 0, skipped: false, error: 'No valid profile identifiers found' }
+    }
+    
+    // Call enrichment service with progress updates
+    console.log(`📞 Calling Apify enrichment for ${profileIdentifiers.length} profiles`)
+    
+    // Update progress during Apify call
+    const enrichProgress = progressStore.get(progressId)
+    if (enrichProgress) {
+      progressStore.set(progressId, {
+        ...enrichProgress,
+        currentStep: `Sending ${profileIdentifiers.length} profiles to LinkedIn Profile Enrichment Scraper...`,
+        progress: 94
+      })
+    }
+    
+    // Quick update to show we're now waiting for results
+    setTimeout(() => {
+      const waitingProgress = progressStore.get(progressId)
+      if (waitingProgress) {
+        progressStore.set(progressId, {
+          ...waitingProgress,
+          currentStep: `Waiting for LinkedIn Profile Enrichment results (${profileIdentifiers.length} profiles processing...)`,
+          progress: 95
+        })
+      }
+    }, 500) // Half second delay to show transition
+    
+    const enrichedData = await apifyService.enrichAllProfiles(profileIdentifiers, false)
+    
+    if (!enrichedData || enrichedData.length === 0) {
+      console.warn('No enriched data returned from Apify')
+      
+      // Update progress to show no data returned
+      const noDataProgress = progressStore.get(progressId)
+      if (noDataProgress) {
+        progressStore.set(progressId, {
+          ...noDataProgress,
+          currentStep: 'No enriched data returned from Apify • Finishing up...',
+          progress: 98
+        })
+      }
+      
+      return { enrichedCount: 0, skipped: false, error: 'No enriched data returned from Apify' }
+    }
+    
+    console.log(`✅ Received enriched data for ${enrichedData.length} profiles`)
+    
+    // Update progress for processing phase
+    const processProgress = progressStore.get(progressId)
+    if (processProgress) {
+      progressStore.set(progressId, {
+        ...processProgress,
+        currentStep: `LinkedIn Profile Enrichment completed! Processing ${enrichedData.length} enriched profiles...`,
+        progress: 96
+      })
+    }
+    
+    // Process and save enriched data (similar to enrich-profiles-progress route)
+    const validEnrichedProfiles = enrichedData.filter(profile => 
+      profile.basic_info && !profile.basic_info.error_message?.includes('No profile found')
+    )
+    
+    let updatedCount = 0
+    
+    for (const enrichedProfile of validEnrichedProfiles) {
+      try {
+        const basicInfo = enrichedProfile.basic_info
+        const currentExperience = enrichedProfile.experience?.find(exp => exp.is_current)
+        
+        const updateData = {
+          first_name: basicInfo.first_name || null,
+          last_name: basicInfo.last_name || null,
+          profile_picture_url: basicInfo.profile_picture_url || null,
+          country: basicInfo.location?.country || null,
+          city: basicInfo.location?.city || null,
+          current_title: currentExperience?.title || null,
+          current_company: currentExperience?.company || null,
+          is_current_position: currentExperience?.is_current || false,
+          company_linkedin_url: currentExperience?.company_linkedin_url || null,
+          public_identifier: basicInfo.public_identifier || null,
+          primary_identifier: basicInfo.urn || null,
+          secondary_identifier: basicInfo.public_identifier || enrichedProfile.profileUrl || null,
+          enriched_at: new Date().toISOString(),
+          last_enriched_at: new Date().toISOString()
+        }
+        
+        // Enhanced matching strategies using all available identifiers
+        let updated = false
+        
+        // Strategy 1: Match by primary_identifier (URN)
+        if (basicInfo.urn && !updated) {
+          const { data } = await supabase.from('profiles').update(updateData).eq('primary_identifier', basicInfo.urn).select()
+          if (data && data.length > 0) {
+            updatedCount += data.length
+            updated = true
+          }
+        }
+        
+        // Strategy 2: Match by secondary_identifier (public identifier)
+        if (!updated && basicInfo.public_identifier) {
+          const { data } = await supabase.from('profiles').update(updateData).eq('secondary_identifier', basicInfo.public_identifier).select()
+          if (data && data.length > 0) {
+            updatedCount += data.length
+            updated = true
+          }
+        }
+        
+        // Strategy 3: Match by legacy urn field (for existing profiles)
+        if (!updated && basicInfo.urn) {
+          const { data } = await supabase.from('profiles').update(updateData).eq('urn', basicInfo.urn).select()
+          if (data && data.length > 0) {
+            updatedCount += data.length
+            updated = true
+          }
+        }
+        
+        // Strategy 4: Match by legacy urn field using public identifier
+        if (!updated && basicInfo.public_identifier) {
+          const { data } = await supabase.from('profiles').update(updateData).eq('urn', basicInfo.public_identifier).select()
+          if (data && data.length > 0) {
+            updatedCount += data.length
+            updated = true
+          }
+        }
+        
+        // Strategy 5: Match by profile_url pattern (public identifier)
+        if (!updated && basicInfo.public_identifier) {
+          const { data } = await supabase.from('profiles').update(updateData).ilike('profile_url', `%${basicInfo.public_identifier}%`).select()
+          if (data && data.length > 0) {
+            updatedCount += data.length
+            updated = true
+          }
+        }
+        
+        // Strategy 6: Match by profile_url pattern (URN)
+        if (!updated && basicInfo.urn) {
+          const { data } = await supabase.from('profiles').update(updateData).ilike('profile_url', `%${basicInfo.urn}%`).select()
+          if (data && data.length > 0) {
+            updatedCount += data.length
+            updated = true
+          }
+        }
+        
+      } catch (updateError) {
+        console.error('Error updating profile during auto-enrichment:', updateError)
+      }
+    }
+    
+    console.log(`🎉 Auto-enrichment completed: ${updatedCount} profiles updated`)
+    
+    // Update progress to show enrichment completed
+    const finalProgress = progressStore.get(progressId)
+    if (finalProgress) {
+      progressStore.set(progressId, {
+        ...finalProgress,
+        currentStep: `Auto-enriched ${updatedCount} profiles • Finishing up...`,
+        progress: 98
+      })
+    }
+    
+    return { enrichedCount: updatedCount, skipped: false }
+    
+  } catch (enrichError) {
+    console.error('Auto-enrichment error:', enrichError)
+    
+    // Update progress to show enrichment failed but don't fail the main operation
+    const failProgress = progressStore.get(progressId)
+    if (failProgress) {
+      progressStore.set(progressId, {
+        ...failProgress,
+        currentStep: 'Auto-enrichment failed • Finishing up...',
+        progress: 97
+      })
+    }
+    
+    return { enrichedCount: 0, skipped: false, error: enrichError instanceof Error ? enrichError.message : 'Unknown error' }
+  }
+}
+
 // Store progress data in memory
 const progressStore = new Map<string, {
   status: 'starting' | 'scraping' | 'processing' | 'saving' | 'completed' | 'error'
@@ -66,7 +577,7 @@ export async function POST(request: NextRequest) {
     progressStore.set(progressId, {
       status: 'starting',
       progress: 0,
-      currentStep: 'Initializing reactions scraper...',
+      currentStep: 'Initializing LinkedIn Post Reactions Scraper...',
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -122,12 +633,13 @@ async function processReactionsScraping(
   try {
     const results: any[] = []
     const errors: string[] = []
+    const allNewlyUpsertedProfileIds: string[] = [] // Track all profiles that need enrichment
 
     // Update progress: Starting scraper
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 10,
-      currentStep: 'Starting reactions scraper...',
+      currentStep: 'Starting LinkedIn Post Reactions Scraper...',
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -140,7 +652,7 @@ async function processReactionsScraping(
     progressStore.set(progressId, {
       status: 'scraping',
       progress: 20,
-      currentStep: `Scraping reactions from ${posts.length} posts...`,
+      currentStep: `LinkedIn Post Reactions Scraper processing ${posts.length} posts...`,
       totalPosts: posts.length,
       processedPosts: 0
     })
@@ -225,53 +737,75 @@ async function processReactionsScraping(
               profilesCount: 0
             })
           } else {
-            // Process profiles first (same approach as regular API)
+            // Process profiles with sophisticated deduplication
             const uniqueProfiles = new Map<string, any>()
             
             validReactions.forEach(reaction => {
-              if (!uniqueProfiles.has(reaction.reactor.urn)) {
-                uniqueProfiles.set(reaction.reactor.urn, reaction.reactor)
+              // Use a composite key for better deduplication
+              const { primary_identifier, secondary_identifier } = extractProfileIdentifiers(reaction.reactor)
+              const key = primary_identifier || secondary_identifier || reaction.reactor.urn
+              
+              if (!uniqueProfiles.has(key)) {
+                uniqueProfiles.set(key, reaction.reactor)
               }
             })
 
-            // Upsert profiles using URN as key (same as regular API)
-            const profilesToUpsert = Array.from(uniqueProfiles.values()).map(reactor => ({
-              urn: reactor.urn,
-              name: reactor.name,
-              headline: reactor.headline,
-              profile_url: reactor.profile_url,
-              profile_pictures: reactor.profile_pictures
-            }))
+            // Upsert profiles using new dual identifier system
+            const profilesToUpsert = Array.from(uniqueProfiles.values())
+            let profilesWithIds = []
+            let newlyUpsertedProfileIds = []
 
             if (profilesToUpsert.length > 0) {
-              const { error: profileError } = await supabase
-                .from('profiles')
-                .upsert(profilesToUpsert, {
-                  onConflict: 'urn',
-                  ignoreDuplicates: false
-                })
-
-              if (profileError) {
+              try {
+                const upsertResult = await upsertProfilesWithDualIdentifiers(supabase, profilesToUpsert)
+                profilesWithIds = upsertResult.profiles
+                newlyUpsertedProfileIds.push(...upsertResult.newlyUpsertedIds)
+                allNewlyUpsertedProfileIds.push(...upsertResult.newlyUpsertedIds) // Collect for later enrichment
+                console.log(`✅ Successfully processed ${profilesWithIds.length} profiles for post ${post.id} (${upsertResult.newlyUpsertedIds.length} need enrichment)`)
+              } catch (profileError) {
                 console.error('Error upserting profiles:', profileError)
-                errors.push(`Failed to save profiles for post ${post.id}: ${profileError.message}`)
+                errors.push(`Failed to save profiles for post ${post.id}: ${profileError instanceof Error ? profileError.message : 'Unknown error'}`)
+                profilesWithIds = []
               }
             }
 
-            // Get profile IDs for the reactions (same as regular API)
-            const { data: profilesWithIds, error: profilesSelectError } = await supabase
-              .from('profiles')
-              .select('id, urn')
-              .in('urn', Array.from(uniqueProfiles.keys()))
-
-            if (profilesSelectError) {
-              console.error('Failed to get profile IDs:', profilesSelectError)
-              errors.push(`Failed to get profile IDs for post ${post.id}: ${profilesSelectError.message}`)
-            } else {
-              // Create a map of URN to profile ID
+            if (profilesWithIds.length > 0) {
+              // Create a map of reactor URN to profile ID  
               const urnToIdMap = new Map<string, string>()
-              profilesWithIds?.forEach((profile: any) => {
+              
+              // Instead of relying on URN match (which might be preserved from earlier),
+              // match by order and fall back to URN/identifier matching
+              const uniqueProfilesArray = Array.from(uniqueProfiles.values())
+              
+              profilesWithIds?.forEach((profile: any, index: number) => {
+                // Primary: match by index since upsertProfilesWithDualIdentifiers processes in the same order
+                if (index < uniqueProfilesArray.length) {
+                  const originalReactor = uniqueProfilesArray[index]
+                  urnToIdMap.set(originalReactor.urn, profile.id)
+                }
+                
+                // Also add the returned profile URN for fallback matching
                 urnToIdMap.set(profile.urn, profile.id)
               })
+              
+              // Additional fallback: try to match by primary/secondary identifiers
+              uniqueProfilesArray.forEach(reactor => {
+                if (!urnToIdMap.has(reactor.urn)) {
+                  const { primary_identifier, secondary_identifier } = extractProfileIdentifiers(reactor)
+                  
+                  const matchingProfile = profilesWithIds.find(p => 
+                    p.urn === primary_identifier || 
+                    p.urn === secondary_identifier ||
+                    (reactor.profile_url && reactor.profile_url.includes(p.urn))
+                  )
+                  
+                  if (matchingProfile) {
+                    urnToIdMap.set(reactor.urn, matchingProfile.id)
+                  }
+                }
+              })
+
+              console.log(`🔗 Mapped ${urnToIdMap.size} reactor URNs to profile IDs`)
 
               // Prepare reactions for insertion
               const reactions: Reaction[] = validReactions.map(reaction => {
@@ -387,25 +921,65 @@ async function processReactionsScraping(
       message += ` • ${errors.length} errors occurred`
     }
 
+    // Set progress to 90% before enrichment
+    progressStore.set(progressId, {
+      status: 'processing',
+      progress: 90,
+      currentStep: 'LinkedIn Post Reactions Scraper completed • Starting LinkedIn Profile Enrichment...',
+      totalPosts: posts.length,
+      processedPosts: posts.length,
+      totalReactions,
+      processedReactions: totalReactions
+    })
+
+    console.log(`Reactions scraping completed for ${posts.length} posts`)
+
+    // Auto-enrich newly discovered profiles with visible progress
+    let enrichmentResult = { enrichedCount: 0, skipped: true }
+    try {
+      console.log(`🎯 Starting auto-enrichment for ${allNewlyUpsertedProfileIds.length} newly discovered profiles`)
+      enrichmentResult = await autoEnrichProfiles(supabase, user.id, progressId, allNewlyUpsertedProfileIds)
+    } catch (enrichError) {
+      console.warn('Auto-enrichment failed:', enrichError)
+      // Update progress to show enrichment failed but don't fail the whole operation
+      progressStore.set(progressId, {
+        status: 'processing',
+        progress: 95,
+        currentStep: 'Auto-enrichment failed, but scraping completed successfully',
+        totalPosts: posts.length,
+        processedPosts: posts.length,
+        totalReactions,
+        processedReactions: totalReactions
+      })
+    }
+
+    // Update final message with enrichment results
+    if (enrichmentResult.enrichedCount > 0) {
+      message += ` • Auto-enriched ${enrichmentResult.enrichedCount} profiles`
+    } else if (!enrichmentResult.skipped) {
+      message += ' • No profiles needed enrichment'
+    }
+
+    // NOW mark as completed with final results
     progressStore.set(progressId, {
       status: 'completed',
       progress: 100,
-      currentStep: 'Completed successfully',
+      currentStep: 'All operations completed successfully',
       totalPosts: posts.length,
       processedPosts: posts.length,
       totalReactions,
       processedReactions: totalReactions,
+      processedItems: enrichmentResult.enrichedCount, // Track enriched profiles for UI
       result: {
         message,
         postsProcessed: posts.length,
         totalReactions,
         totalProfiles,
+        enrichedProfiles: enrichmentResult.enrichedCount,
         results,
         errors
       }
     })
-
-    console.log(`Reactions scraping completed for ${posts.length} posts`)
 
     // Update last sync time to mark this as a completed scraping session
     try {

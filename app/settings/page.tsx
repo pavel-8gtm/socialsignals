@@ -9,12 +9,14 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import type { Database } from '@/lib/types/database.types'
 
 type UserSettings = Database['public']['Tables']['user_settings']['Row']
 
 const formSchema = z.object({
   apify_api_key: z.string().min(1, 'Apify API key is required'),
+  monitored_profiles: z.string().optional(),
 })
 
 export default function SettingsPage() {
@@ -29,6 +31,7 @@ export default function SettingsPage() {
     resolver: zodResolver(formSchema),
     defaultValues: {
       apify_api_key: '',
+      monitored_profiles: '',
     },
   })
 
@@ -58,6 +61,7 @@ export default function SettingsPage() {
       } else if (data) {
         setSettings(data)
         form.setValue('apify_api_key', data.apify_api_key)
+        form.setValue('monitored_profiles', (data.monitored_profiles || []).join('\n'))
       }
     } catch (error) {
       setError('Failed to load settings')
@@ -78,11 +82,22 @@ export default function SettingsPage() {
         return
       }
 
+      // Parse monitored profiles from textarea (one per line)
+      const monitoredProfilesArray = values.monitored_profiles
+        ? values.monitored_profiles
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0)
+        : []
+
       const { error } = await supabase
         .from('user_settings')
         .upsert({
           user_id: user.id,
           apify_api_key: values.apify_api_key,
+          monitored_profiles: monitoredProfilesArray,
+        }, {
+          onConflict: 'user_id'
         })
 
       if (error) {
@@ -202,6 +217,86 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Monitored LinkedIn Profiles</CardTitle>
+            <CardDescription>
+              Add LinkedIn profile URLs that you want to monitor regularly. These profiles will be pre-selected when you use "Scrape from Profile".
+              Enter one profile URL per line.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                <FormField
+                  control={form.control}
+                  name="monitored_profiles"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>LinkedIn Profile URLs</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder={`https://www.linkedin.com/in/john-doe/
+https://www.linkedin.com/in/jane-smith/
+https://www.linkedin.com/in/example-profile/`}
+                          rows={6}
+                          disabled={isSaving}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                      <div className="text-sm text-gray-500">
+                        Tip: You can copy profile URLs directly from LinkedIn. Both vanity URLs (linkedin.com/in/username) and full URLs with parameters work.
+                      </div>
+                    </FormItem>
+                  )}
+                />
+                {error && (
+                  <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">
+                    {error}
+                  </div>
+                )}
+                {success && (
+                  <div className="p-3 text-sm text-green-600 bg-green-50 border border-green-200 rounded-md">
+                    {success}
+                  </div>
+                )}
+                <Button
+                  type="submit"
+                  disabled={isSaving}
+                >
+                  {isSaving ? 'Saving...' : 'Save Settings'}
+                </Button>
+              </form>
+            </Form>
+            
+            {settings && settings.monitored_profiles && settings.monitored_profiles.length > 0 && (
+              <div className="mt-6 pt-6 border-t">
+                <h3 className="text-sm font-medium text-gray-900 mb-2">Current Monitored Profiles</h3>
+                <div className="text-sm text-gray-600">
+                  <ul className="space-y-1">
+                    {settings.monitored_profiles.map((profile, index) => (
+                      <li key={index} className="flex items-center gap-2">
+                        <span className="text-green-600">✓</span>
+                        <a 
+                          href={profile} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 hover:underline truncate"
+                        >
+                          {profile}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-gray-500 mt-2">
+                    {settings.monitored_profiles.length} profile{settings.monitored_profiles.length === 1 ? '' : 's'} configured
+                  </p>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
       </div>
     </div>

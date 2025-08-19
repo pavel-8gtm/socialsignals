@@ -34,7 +34,10 @@ const formSchema = z.object({
 })
 
 const profileFormSchema = z.object({
-  profileUrl: z.string().min(1, 'Please enter a LinkedIn profile URL').url('Please enter a valid URL'),
+  profileUrl: z.string().optional().refine((val) => {
+    // If provided, must be a valid URL
+    return !val || (val.trim().length > 0 && z.string().url().safeParse(val).success)
+  }, 'Please enter a valid URL'),
   scrapeUntilDate: z.string().optional(),
   maxPosts: z.string().optional(),
 })
@@ -52,6 +55,13 @@ export default function PostsPage() {
   const [showProfileDialog, setShowProfileDialog] = useState(false)
   const [isScrapingProfile, setIsScrapingProfile] = useState(false)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  const [monitoredProfiles, setMonitoredProfiles] = useState<string[]>([])
+  const [selectedMonitoredProfiles, setSelectedMonitoredProfiles] = useState<Set<string>>(new Set())
+  const [recentlyAddedPosts, setRecentlyAddedPosts] = useState<Set<string>>(new Set())
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage] = useState(50) // 50 posts per page
   
   // Progress tracking
   const progressTracking = useProgressTracking()
@@ -114,10 +124,19 @@ export default function PostsPage() {
           progressTracking.completeProgress()
           
           if (data.status === 'completed') {
-            setSuccess(data.result?.message || 'Operation completed successfully')
+            // Show a more accurate success message and count newly added posts
+            let successMessage = data.result?.message || 'Operation completed successfully'
             if (!skipLoadPosts) {
-              loadPosts() // Reload posts
+              const newPostsCount = await loadPosts(true) // Reload posts and detect new ones
+              
+              // Update success message with actual count of new posts if available
+              if (newPostsCount > 0) {
+                successMessage = `Successfully added ${newPostsCount} new post${newPostsCount === 1 ? '' : 's'}`
+              } else if (successMessage.includes('No posts found')) {
+                successMessage = 'Profile scraping completed - no new posts found'
+              }
             }
+            setSuccess(successMessage)
           } else {
             setError(data.error || 'Operation failed')
           }
@@ -142,7 +161,7 @@ export default function PostsPage() {
   const [showEngagementDialog, setShowEngagementDialog] = useState(false)
   const [engagementData, setEngagementData] = useState<{ post: Post; type: 'reactions' | 'comments'; profiles: any[] } | null>(null)
   const [loadingEngagement, setLoadingEngagement] = useState(false)
-  const [sortBy, setSortBy] = useState<'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | null>('posted_at')
+  const [sortBy, setSortBy] = useState<'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | 'metadata_last_updated_at' | null>('posted_at')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [showNeedingScrapingOnly, setShowNeedingScrapingOnly] = useState(false)
   const [authorFilter, setAuthorFilter] = useState('')
@@ -167,16 +186,41 @@ export default function PostsPage() {
   useEffect(() => {
     loadUser()
     loadPosts()
+    loadMonitoredProfiles()
   }, [])
+
+  async function loadMonitoredProfiles() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const { data, error } = await supabase
+        .from('user_settings')
+        .select('monitored_profiles')
+        .eq('user_id', user.id)
+        .single()
+
+      if (!error && data?.monitored_profiles) {
+        setMonitoredProfiles(data.monitored_profiles)
+        // Pre-select all monitored profiles by default
+        setSelectedMonitoredProfiles(new Set(data.monitored_profiles))
+      }
+    } catch (error) {
+      console.warn('Failed to load monitored profiles:', error)
+      // Don't show error to user, this is non-critical
+    }
+  }
 
   async function loadUser() {
     const { data: { user } } = await supabase.auth.getUser()
     setUser(user)
   }
 
-  async function loadPosts() {
+  async function loadPosts(detectNewPosts = false) {
     setIsLoading(true)
     try {
+      const previousPostIds = detectNewPosts ? new Set(posts.map(p => p.id)) : new Set()
+      
       const { data, error } = await supabase
         .from('posts')
         .select(`
@@ -188,6 +232,7 @@ export default function PostsPage() {
 
       if (error) {
         setError(error.message)
+        return 0
       } else {
         // Transform the data to include counts
         const postsWithCounts = (data || []).map(post => ({
@@ -195,10 +240,34 @@ export default function PostsPage() {
           reactions_count: post.reactions_count?.[0]?.count || 0,
           comments_count: post.comments_count?.[0]?.count || 0
         }))
+        
+        let newPostsCount = 0
+        
+        // Detect newly added posts
+        if (detectNewPosts) {
+          const newPostIds = new Set()
+          postsWithCounts.forEach(post => {
+            if (!previousPostIds.has(post.id)) {
+              newPostIds.add(post.id)
+            }
+          })
+          newPostsCount = newPostIds.size
+          setRecentlyAddedPosts(newPostIds)
+          
+          // Clear the "new" indicators after 10 seconds
+          if (newPostIds.size > 0) {
+            setTimeout(() => {
+              setRecentlyAddedPosts(new Set())
+            }, 10000)
+          }
+        }
+        
         setPosts(postsWithCounts)
+        return newPostsCount
       }
     } catch (error) {
       setError('Failed to load posts')
+      return 0
     } finally {
       setIsLoading(false)
     }
@@ -365,8 +434,14 @@ export default function PostsPage() {
                 const response = await fetch(`/api/scrape/reactions-progress?progressId=${reactionsProgressId}`)
                 const data = await response.json()
                 
+                // Show detailed progress from the API
+                if (data.currentStep) {
+                  progressTracking.updateStep('reactions', { id: 'reactions', label: data.currentStep, status: 'running' })
+                }
+                
                 if (data.status === 'completed') {
-                  progressTracking.updateStep('reactions', { id: 'reactions', label: `Reactions completed (${data.totalReactions || 0} found)`, status: 'completed' })
+                  const enrichedText = data.enrichedProfiles ? ` • Auto-enriched ${data.enrichedProfiles} profiles` : ''
+                  progressTracking.updateStep('reactions', { id: 'reactions', label: `Reactions completed (${data.totalReactions || 0} found)${enrichedText}`, status: 'completed' })
                   clearInterval(pollReactions)
                   resolve(data)
                 } else if (data.status === 'error') {
@@ -392,8 +467,14 @@ export default function PostsPage() {
                 const response = await fetch(`/api/scrape/comments-progress?progressId=${commentsProgressId}`)
                 const data = await response.json()
                 
+                // Show detailed progress from the API
+                if (data.currentStep) {
+                  progressTracking.updateStep('comments', { id: 'comments', label: data.currentStep, status: 'running' })
+                }
+                
                 if (data.status === 'completed') {
-                  progressTracking.updateStep('comments', { id: 'comments', label: `Comments completed (${data.totalComments || 0} found)`, status: 'completed' })
+                  const enrichedText = data.enrichedProfiles ? ` • Auto-enriched ${data.enrichedProfiles} profiles` : ''
+                  progressTracking.updateStep('comments', { id: 'comments', label: `Comments completed (${data.totalComments || 0} found)${enrichedText}`, status: 'completed' })
                   clearInterval(pollComments)
                   resolve(data)
                 } else if (data.status === 'error') {
@@ -801,8 +882,27 @@ export default function PostsPage() {
         return
       }
 
+      // Collect profiles to scrape: selected monitored profiles + custom profile URL
+      const profilesToScrape: string[] = []
+      
+      // Add selected monitored profiles
+      profilesToScrape.push(...Array.from(selectedMonitoredProfiles))
+      
+      // Add custom profile URL if provided and not already in monitored profiles
+      if (values.profileUrl && values.profileUrl.trim()) {
+        const customUrl = values.profileUrl.trim()
+        if (!profilesToScrape.includes(customUrl)) {
+          profilesToScrape.push(customUrl)
+        }
+      }
+
+      if (profilesToScrape.length === 0) {
+        setError('Please select at least one monitored profile or enter an additional profile URL')
+        return
+      }
+
       const requestBody: any = {
-        profileUrl: values.profileUrl
+        profileUrls: profilesToScrape  // Changed from single profileUrl to multiple profileUrls
       }
 
       // Add optional parameters if provided
@@ -825,33 +925,72 @@ export default function PostsPage() {
         { id: 'saving', label: 'Save to database', status: 'pending' }
       ]
       
-      progressTracking.startProgress('Scraping Posts from LinkedIn Profile', initialSteps)
+      const profileText = profilesToScrape.length === 1 ? 'Profile' : `${profilesToScrape.length} Profiles`
+      progressTracking.startProgress(`Scraping Posts from LinkedIn ${profileText}`, initialSteps)
 
-      // Start the progress-enabled scraping
-      const response = await fetch('/api/scrape/profile-posts-progress', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      })
-
-      const result = await response.json()
-
-      if (!response.ok) {
-        progressTracking.updateStep('init', {
-          id: 'init',
-          label: 'Failed to start',
-          status: 'error',
-          errorMessage: result.error || 'Failed to scrape profile posts'
+      // Process profiles sequentially
+      let totalPostsScraped = 0
+      let successfulProfiles = 0
+      
+      for (let i = 0; i < profilesToScrape.length; i++) {
+        const profileUrl = profilesToScrape[i]
+        const profileName = profileUrl.split('/in/')[1]?.split('/')[0] || `Profile ${i + 1}`
+        
+        // Update current step to show which profile is being processed
+        progressTracking.updateStep('scraping', {
+          id: 'scraping',
+          label: `Scraping ${profileName} (${i + 1}/${profilesToScrape.length})`,
+          status: 'running'
         })
-        progressTracking.completeProgress()
-        setError(result.error || 'Failed to scrape profile posts')
-        return
+        
+        try {
+          const individualRequestBody = {
+            profileUrl,
+            ...(requestBody.scrapeUntilDate && { scrapeUntilDate: requestBody.scrapeUntilDate }),
+            ...(requestBody.maxPosts && { maxPosts: requestBody.maxPosts })
+          }
+
+          const response = await fetch('/api/scrape/profile-posts-progress', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(individualRequestBody),
+          })
+
+          const result = await response.json()
+
+          if (response.ok) {
+            // Poll for this profile's completion
+            await pollProgress(result.progressId, '/api/scrape/profile-posts-progress')
+            successfulProfiles++
+            // Assume some posts were scraped (we could enhance this to get actual count)
+            totalPostsScraped += 10 // Placeholder
+          } else {
+            console.error(`Failed to scrape profile ${profileUrl}:`, result.error)
+          }
+        } catch (profileError) {
+          console.error(`Error scraping profile ${profileUrl}:`, profileError)
+        }
       }
 
-      // Start polling for progress
-      await pollProgress(result.progressId, '/api/scrape/profile-posts-progress')
+      // Update final progress
+      if (successfulProfiles === profilesToScrape.length) {
+        progressTracking.updateStep('saving', {
+          id: 'saving',
+          label: `Successfully scraped ${successfulProfiles} profile${successfulProfiles === 1 ? '' : 's'}`,
+          status: 'completed'
+        })
+      } else {
+        progressTracking.updateStep('saving', {
+          id: 'saving',
+          label: `Completed ${successfulProfiles}/${profilesToScrape.length} profiles`,
+          status: successfulProfiles > 0 ? 'completed' : 'error',
+          errorMessage: successfulProfiles === 0 ? 'No profiles could be scraped' : undefined
+        })
+      }
+      
+      progressTracking.completeProgress()
       
       profileForm.reset()
       setShowProfileDialog(false)
@@ -871,7 +1010,7 @@ export default function PostsPage() {
   }
 
   // Sorting function
-  const handleSort = (column: 'posted_at' | 'author_name' | 'scraped_at') => {
+  const handleSort = (column: 'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | 'metadata_last_updated_at') => {
     if (sortBy === column) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
     } else {
@@ -926,6 +1065,10 @@ export default function PostsPage() {
           valueA = a.created_at ? new Date(a.created_at).getTime() : 0
           valueB = b.created_at ? new Date(b.created_at).getTime() : 0
           break
+        case 'metadata_last_updated_at':
+          valueA = a.metadata_last_updated_at ? new Date(a.metadata_last_updated_at).getTime() : 0
+          valueB = b.metadata_last_updated_at ? new Date(b.metadata_last_updated_at).getTime() : 0
+          break
         default:
           return 0
       }
@@ -937,6 +1080,19 @@ export default function PostsPage() {
 
     return sorted
   }, [posts, sortBy, sortOrder, showNeedingScrapingOnly, authorFilter])
+
+  // Pagination logic
+  const totalPages = Math.ceil(filteredAndSortedPosts.length / itemsPerPage)
+  const paginatedPosts = React.useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage
+    const endIndex = startIndex + itemsPerPage
+    return filteredAndSortedPosts.slice(startIndex, endIndex)
+  }, [filteredAndSortedPosts, currentPage, itemsPerPage])
+
+  // Reset to first page when filters change
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [showNeedingScrapingOnly, authorFilter, sortBy, sortOrder])
 
   // Count posts needing scraping
   const postsNeedingScraping = React.useMemo(() => {
@@ -986,9 +1142,63 @@ export default function PostsPage() {
                 <DialogHeader>
                   <DialogTitle>Scrape Posts from LinkedIn Profile</DialogTitle>
                   <DialogDescription>
-                    Enter a LinkedIn profile URL to automatically scrape and add all posts from that profile.
+                    Select monitored profiles or enter a custom LinkedIn profile URL to automatically scrape and add all posts from that profile.
                   </DialogDescription>
                 </DialogHeader>
+
+                {/* Monitored Profiles Section */}
+                {monitoredProfiles.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-medium text-gray-900">Monitored Profiles</h3>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedMonitoredProfiles(new Set(monitoredProfiles))}
+                        >
+                          Select All
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedMonitoredProfiles(new Set())}
+                        >
+                          Clear All
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid gap-2 max-h-32 overflow-y-auto border rounded-md p-3">
+                      {monitoredProfiles.map((profile, index) => (
+                        <label key={index} className="flex items-center space-x-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedMonitoredProfiles.has(profile)}
+                            onChange={(e) => {
+                              const newSelected = new Set(selectedMonitoredProfiles)
+                              if (e.target.checked) {
+                                newSelected.add(profile)
+                              } else {
+                                newSelected.delete(profile)
+                              }
+                              setSelectedMonitoredProfiles(newSelected)
+                            }}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700 truncate flex-1">
+                            {profile}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {selectedMonitoredProfiles.size} of {monitoredProfiles.length} monitored profiles selected
+                    </div>
+                    <div className="border-b"></div>
+                  </div>
+                )}
                 
                 <Form {...profileForm}>
                   <form onSubmit={profileForm.handleSubmit(onProfileSubmit)} className="space-y-4">
@@ -997,7 +1207,7 @@ export default function PostsPage() {
                       name="profileUrl"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>LinkedIn Profile URL</FormLabel>
+                          <FormLabel>Additional LinkedIn Profile URL (Optional)</FormLabel>
                           <FormControl>
                             <Input
                               placeholder="https://www.linkedin.com/in/username/"
@@ -1005,7 +1215,7 @@ export default function PostsPage() {
                             />
                           </FormControl>
                           <FormDescription>
-                            Enter the full LinkedIn profile URL (e.g., https://www.linkedin.com/in/username/)
+                            Enter an additional LinkedIn profile URL to scrape along with selected monitored profiles
                           </FormDescription>
                           <FormMessage />
                         </FormItem>
@@ -1342,7 +1552,7 @@ export default function PostsPage() {
 
         {/* Posts Table */}
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="px-3 py-0">
             {isLoading ? (
               <div className="p-6">
                 <div className="space-y-4">
@@ -1357,9 +1567,61 @@ export default function PostsPage() {
                 <p className="text-sm">Click "Add Manually" to get started with LinkedIn engagement analysis</p>
               </div>
             ) : (
+              <>
+              {/* Top Pagination Controls */}
+              {!isLoading && filteredAndSortedPosts.length > 0 && totalPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 border-b">
+                  <div className="text-sm text-gray-600">
+                    {selectedPosts.size > 0 ? (
+                      `${selectedPosts.size} post${selectedPosts.size === 1 ? '' : 's'} selected`
+                    ) : (
+                      `Showing ${(currentPage - 1) * itemsPerPage + 1} to ${Math.min(currentPage * itemsPerPage, filteredAndSortedPosts.length)} of ${filteredAndSortedPosts.length} posts`
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(1)}
+                      disabled={currentPage === 1}
+                    >
+                      First
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <span className="text-sm text-gray-600 px-3">
+                      Page {currentPage} of {totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                    >
+                      Next
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(totalPages)}
+                      disabled={currentPage === totalPages}
+                    >
+                      Last
+                    </Button>
+                  </div>
+                </div>
+              )}
+              
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-12 text-center">#</TableHead>
                     <TableHead className="w-12">
                       <Checkbox
                         checked={
@@ -1426,11 +1688,30 @@ export default function PostsPage() {
                       </div>
                     </TableHead>
                     <TableHead>Last Scraped</TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('metadata_last_updated_at')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Metadata Updated
+                        {sortBy === 'metadata_last_updated_at' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredAndSortedPosts.map((post) => (
-                    <TableRow key={post.id}>
+                  {paginatedPosts.map((post, index) => (
+                    <TableRow 
+                      key={post.id}
+                      className={recentlyAddedPosts.has(post.id) ? "bg-green-50 border-l-4 border-l-green-500" : ""}
+                    >
+                      <TableCell className="text-center text-sm text-gray-500 font-mono">
+                        {(currentPage - 1) * itemsPerPage + index + 1}
+                      </TableCell>
                       <TableCell>
                         <Checkbox
                           checked={selectedPosts.has(post.id)}
@@ -1449,6 +1730,11 @@ export default function PostsPage() {
                           >
                             Post {post.post_id}
                           </button>
+                          {recentlyAddedPosts.has(post.id) && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                              NEW
+                            </span>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -1564,10 +1850,66 @@ export default function PostsPage() {
                           return mostRecent.toLocaleDateString()
                         })()}
                       </TableCell>
+                      <TableCell className="text-sm text-gray-600">
+                        {post.metadata_last_updated_at 
+                          ? new Date(post.metadata_last_updated_at).toLocaleDateString()
+                          : 'Never'
+                        }
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              
+              {!isLoading && filteredAndSortedPosts.length > 0 && totalPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 border-t">
+                  <div className="text-sm text-gray-600">
+                    {selectedPosts.size > 0 ? (
+                      `${selectedPosts.size} post${selectedPosts.size === 1 ? '' : 's'} selected`
+                    ) : (
+                      `Showing ${(currentPage - 1) * itemsPerPage + 1} to ${Math.min(currentPage * itemsPerPage, filteredAndSortedPosts.length)} of ${filteredAndSortedPosts.length} posts`
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(1)}
+                      disabled={currentPage === 1}
+                    >
+                      First
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <span className="text-sm text-gray-600 px-3">
+                      Page {currentPage} of {totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                    >
+                      Next
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(totalPages)}
+                      disabled={currentPage === totalPages}
+                    >
+                      Last
+                    </Button>
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </CardContent>
         </Card>

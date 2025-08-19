@@ -97,6 +97,7 @@ export type Database = {
           id: string
           last_comments_scrape: string | null
           last_reactions_scrape: string | null
+          metadata_last_updated_at: string | null
           num_comments: number | null
           num_likes: number | null
           num_shares: number | null
@@ -121,6 +122,7 @@ export type Database = {
           id?: string
           last_comments_scrape?: string | null
           last_reactions_scrape?: string | null
+          metadata_last_updated_at?: string | null
           num_comments?: number | null
           num_likes?: number | null
           num_shares?: number | null
@@ -145,6 +147,7 @@ export type Database = {
           id?: string
           last_comments_scrape?: string | null
           last_reactions_scrape?: string | null
+          metadata_last_updated_at?: string | null
           num_comments?: number | null
           num_likes?: number | null
           num_shares?: number | null
@@ -163,67 +166,79 @@ export type Database = {
       }
       profiles: {
         Row: {
+          alternative_urns: Json | null
+          city: string | null
+          company_linkedin_url: string | null
+          country: string | null
+          current_company: string | null
+          current_title: string | null
+          enriched_at: string | null
+          first_name: string | null
           first_seen: string | null
           headline: string | null
           id: string
+          is_current_position: boolean | null
+          last_enriched_at: string | null
+          last_name: string | null
           last_updated: string | null
           name: string | null
+          primary_identifier: string | null
+          profile_picture_url: string | null
           profile_pictures: Json | null
           profile_url: string | null
-          urn: string
-          first_name: string | null
-          last_name: string | null
-          profile_picture_url: string | null
-          country: string | null
-          city: string | null
-          current_title: string | null
-          current_company: string | null
-          is_current_position: boolean | null
-          company_linkedin_url: string | null
           public_identifier: string | null
-          enriched_at: string | null
+          secondary_identifier: string | null
+          urn: string
         }
         Insert: {
+          alternative_urns?: Json | null
+          city?: string | null
+          company_linkedin_url?: string | null
+          country?: string | null
+          current_company?: string | null
+          current_title?: string | null
+          enriched_at?: string | null
+          first_name?: string | null
           first_seen?: string | null
           headline?: string | null
           id?: string
+          is_current_position?: boolean | null
+          last_enriched_at?: string | null
+          last_name?: string | null
           last_updated?: string | null
           name?: string | null
+          primary_identifier?: string | null
+          profile_picture_url?: string | null
           profile_pictures?: Json | null
           profile_url?: string | null
-          urn: string
-          first_name?: string | null
-          last_name?: string | null
-          profile_picture_url?: string | null
-          country?: string | null
-          city?: string | null
-          current_title?: string | null
-          current_company?: string | null
-          is_current_position?: boolean | null
-          company_linkedin_url?: string | null
           public_identifier?: string | null
-          enriched_at?: string | null
+          secondary_identifier?: string | null
+          urn: string
         }
         Update: {
+          alternative_urns?: Json | null
+          city?: string | null
+          company_linkedin_url?: string | null
+          country?: string | null
+          current_company?: string | null
+          current_title?: string | null
+          enriched_at?: string | null
+          first_name?: string | null
           first_seen?: string | null
           headline?: string | null
           id?: string
+          is_current_position?: boolean | null
+          last_enriched_at?: string | null
+          last_name?: string | null
           last_updated?: string | null
           name?: string | null
+          primary_identifier?: string | null
+          profile_picture_url?: string | null
           profile_pictures?: Json | null
           profile_url?: string | null
-          urn?: string
-          first_name?: string | null
-          last_name?: string | null
-          profile_picture_url?: string | null
-          country?: string | null
-          city?: string | null
-          current_title?: string | null
-          current_company?: string | null
-          is_current_position?: boolean | null
-          company_linkedin_url?: string | null
           public_identifier?: string | null
-          enriched_at?: string | null
+          secondary_identifier?: string | null
+          urn?: string
         }
         Relationships: []
       }
@@ -319,6 +334,8 @@ export type Database = {
           apify_api_key: string
           created_at: string | null
           id: string
+          last_sync_time: string | null
+          monitored_profiles: string[] | null
           updated_at: string | null
           user_id: string
         }
@@ -326,13 +343,17 @@ export type Database = {
           apify_api_key: string
           created_at?: string | null
           id?: string
+          last_sync_time?: string | null
+          monitored_profiles?: string[] | null
           updated_at?: string | null
           user_id: string
         }
         Update: {
-          apify_api_key?: string
+          apify_api_key?: string | null
           created_at?: string | null
           id?: string
+          last_sync_time?: string | null
+          monitored_profiles?: string[] | null
           updated_at?: string | null
           user_id?: string
         }
@@ -343,7 +364,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      add_alternative_urn: {
+        Args: { new_urn: string; profile_id: string }
+        Returns: undefined
+      }
+      find_profile_by_any_urn: {
+        Args: { search_urn: string }
+        Returns: string
+      }
+      get_all_urns_for_profile: {
+        Args: { profile_id: string }
+        Returns: string[]
+      }
     }
     Enums: {
       [_ in never]: never

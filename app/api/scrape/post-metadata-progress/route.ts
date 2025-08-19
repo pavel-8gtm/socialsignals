@@ -190,7 +190,8 @@ async function processMetadataScraping(
               author_profile_url: postDetail.author.profile_url,
               author_profile_id: postDetail.author.profile_url, // Use profile URL as ID for now
               post_type: postDetail.post.type,
-              scraped_at: new Date().toISOString()
+              scraped_at: new Date().toISOString(),
+              metadata_last_updated_at: new Date().toISOString()
             }
 
             // Add engagement tracking if stats changed
