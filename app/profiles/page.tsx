@@ -262,6 +262,19 @@ function DateFilterComponent({
   )
 }
 
+// Helper function to format dates as ISO timestamptz
+const formatDateISO = (dateString: string | null | undefined): string => {
+  if (!dateString) return ''
+  try {
+    const date = new Date(dateString)
+    if (isNaN(date.getTime())) return ''
+    // Format as ISO string with timezone offset
+    return date.toISOString().replace('T', ' ').replace('Z', '+00')
+  } catch {
+    return ''
+  }
+}
+
 export default function ProfilesPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -385,14 +398,14 @@ export default function ProfilesPage() {
       profile.headline || '',
       profile.profile_url || '',
       profile.urn || '',
-      profile.first_seen ? new Date(profile.first_seen).toLocaleDateString() : '',
-      profile.last_updated ? new Date(profile.last_updated).toLocaleDateString() : '',
-      profile.last_enriched_at ? new Date(profile.last_enriched_at).toLocaleDateString() : '',
+      formatDateISO(profile.first_seen),
+      formatDateISO(profile.last_updated),
+      formatDateISO(profile.last_enriched_at),
       String(profile.total_reactions || 0),
       String(profile.total_comments || 0),
       String(profile.posts_engaged_with || 0),
       profile.latest_post_url || '',
-      profile.latest_post_date ? new Date(profile.latest_post_date).toLocaleDateString() : '',
+      formatDateISO(profile.latest_post_date),
       profile.current_title || '',
       profile.current_company || '',
       profile.company_linkedin_url || '',
@@ -440,14 +453,14 @@ export default function ProfilesPage() {
         'Headline': profile.headline || '',
         'Profile URL': profile.profile_url || '',
         'URN': profile.urn || '',
-        'First Seen': profile.first_seen ? new Date(profile.first_seen).toLocaleDateString() : '',
-        'Last Updated': profile.last_updated ? new Date(profile.last_updated).toLocaleDateString() : '',
-        'Last Enriched': profile.last_enriched_at ? new Date(profile.last_enriched_at).toLocaleDateString() : '',
+        'First Seen': formatDateISO(profile.first_seen),
+        'Last Updated': formatDateISO(profile.last_updated),
+        'Last Enriched': formatDateISO(profile.last_enriched_at),
         'Total Reactions': profile.total_reactions || 0,
         'Total Comments': profile.total_comments || 0,
         'Posts Engaged With': profile.posts_engaged_with || 0,
         'Last Engaged Post URL': profile.latest_post_url || '',
-        'Last Engaged Post Date': profile.latest_post_date ? new Date(profile.latest_post_date).toLocaleDateString() : '',
+        'Last Engaged Post Date': formatDateISO(profile.latest_post_date),
         'Current Title': profile.current_title || '',
         'Current Company': profile.current_company || '',
         'Company LinkedIn URL': profile.company_linkedin_url || '',
