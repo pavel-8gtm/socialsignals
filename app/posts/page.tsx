@@ -1035,10 +1035,12 @@ export default function PostsPage() {
       )
     }
     
-    // Apply author filter
+    // Apply author/post ID filter
     if (authorFilter.trim()) {
+      const searchTerm = authorFilter.toLowerCase()
       filtered = filtered.filter(post => 
-        post.author_name?.toLowerCase().includes(authorFilter.toLowerCase())
+        post.author_name?.toLowerCase().includes(searchTerm) ||
+        post.post_id?.toLowerCase().includes(searchTerm)
       )
     }
 
@@ -1511,7 +1513,7 @@ export default function PostsPage() {
             <div className="ml-auto flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <Input
-                  placeholder="Filter by author..."
+                  placeholder="Search by author or post ID..."
                   value={authorFilter}
                   onChange={(e) => setAuthorFilter(e.target.value)}
                   className="w-48 h-8 text-sm"

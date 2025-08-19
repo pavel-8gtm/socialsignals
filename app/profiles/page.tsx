@@ -8,11 +8,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Download, ChevronDown, Copy } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Calendar } from '@/components/ui/calendar'
+import { ChevronDown, CalendarIcon, X } from 'lucide-react'
+import { format, startOfDay, endOfDay, subDays, subWeeks, subMonths, isAfter, isBefore } from 'date-fns'
 import type { Database } from '@/lib/types/database.types'
 
 type EngagementTimelineItem = {
@@ -46,6 +48,220 @@ type Profile = Database['public']['Tables']['profiles']['Row'] & {
   }>
 }
 
+// Date Filter Component
+function DateFilterComponent({ 
+  label, 
+  filter, 
+  onFilterChange, 
+  onClear 
+}: { 
+  label: string
+  filter: { from: Date | null; to: Date | null }
+  onFilterChange: (filter: { from: Date | null; to: Date | null }) => void
+  onClear: () => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [isMounted, setIsMounted] = useState(false)
+
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
+
+  // Generate presets only on client side to avoid hydration mismatch
+  const getPresets = () => {
+    if (!isMounted) return []
+    
+    const now = new Date()
+    const today = startOfDay(now)
+    return [
+      { label: 'Today', tooltip: 'Today only', from: today, to: today },
+      { label: 'Yesterday', tooltip: 'Yesterday only', from: subDays(today, 1), to: subDays(today, 1) },
+      { label: 'Last 7 days', tooltip: 'Last 7 days', from: subDays(today, 7), to: today },
+      { label: 'Last 30 days', tooltip: 'Last 30 days', from: subDays(today, 30), to: today },
+      { label: 'Last 3 months', tooltip: 'Last 3 months', from: subMonths(today, 3), to: today }
+    ]
+  }
+
+  const hasFilter = filter.from || filter.to
+  
+  const formatDateRange = () => {
+    if (!hasFilter) return label
+    if (filter.from && filter.to) {
+      return `${format(filter.from, 'MMM d')} - ${format(filter.to, 'MMM d')}`
+    }
+    if (filter.from) {
+      return `After ${format(filter.from, 'MMM d')}`
+    }
+    if (filter.to) {
+      return `Before ${format(filter.to, 'MMM d')}`
+    }
+    return label
+  }
+
+  // Don't render if not mounted to avoid hydration mismatch
+  if (!isMounted) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8 px-3 text-xs hover:bg-gray-50"
+        disabled
+      >
+        <CalendarIcon className="mr-1.5 h-3 w-3" />
+        <span className="truncate max-w-[120px]">{label}</span>
+      </Button>
+    )
+  }
+
+  return (
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant={hasFilter ? "default" : "outline"}
+          size="sm"
+          className={`h-8 px-3 text-xs ${hasFilter ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'hover:bg-gray-50'}`}
+        >
+          <CalendarIcon className="mr-1.5 h-3 w-3" />
+          <span className="truncate max-w-[120px]">{formatDateRange()}</span>
+          {hasFilter && (
+            <span
+              role="button"
+              tabIndex={0}
+              className="ml-1.5 h-3 w-3 opacity-70 hover:opacity-100 cursor-pointer hover:bg-blue-200 rounded-sm p-0.5 -m-0.5 transition-colors flex items-center justify-center"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onClear()
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onClear()
+                }
+              }}
+            >
+              <X className="h-3 w-3" />
+            </span>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent 
+        className="w-auto p-0" 
+        align="start" 
+        side="bottom" 
+        sideOffset={4}
+        collisionPadding={200}
+      >
+        <div className="p-3">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-medium text-sm text-gray-900">{label} Filter</h4>
+            {hasFilter && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  onClear()
+                  setIsOpen(false)
+                }}
+                className="h-6 px-2 text-xs text-gray-500 hover:text-gray-700"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+          
+          <div className="flex gap-4">
+            {/* Left Side - Quick Presets */}
+            <div className="w-32">
+              {isMounted && (
+                <div>
+                  <label className="text-xs font-medium text-gray-700 mb-2 block">Quick Select</label>
+                  <div className="space-y-1">
+                    {getPresets().map((preset) => (
+                      <Button
+                        key={preset.label}
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          onFilterChange({ from: preset.from, to: preset.to })
+                          setIsOpen(false)
+                        }}
+                        className="w-full h-7 px-2 text-xs bg-gray-50 hover:bg-gray-100 border border-gray-200 justify-start"
+                        title={preset.tooltip}
+                      >
+                        {preset.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Current Selection Display */}
+              {hasFilter && (
+                <div className="mt-3 pt-3 border-t">
+                  <label className="text-xs font-medium text-gray-700 mb-1 block">Selected</label>
+                  <div className="text-xs text-gray-600">
+                    {filter.from && format(filter.from, 'MMM d')}
+                    {filter.from && filter.to && filter.from.getTime() !== filter.to.getTime() && (
+                      <> - {format(filter.to, 'MMM d')}</>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {/* Right Side - Compact Date Range */}
+            <div className="flex-1">
+              <label className="text-xs font-medium text-gray-700 mb-2 block">Custom Date Range</label>
+              
+              <div className="flex gap-3">
+                {/* From Date */}
+                <div className="flex-1">
+                  <label className="text-xs text-gray-600 mb-1 block">From</label>
+                  <Calendar
+                    mode="single"
+                    selected={filter.from || undefined}
+                    onSelect={(date) => onFilterChange({ ...filter, from: date || null })}
+                    className="rounded-md border"
+                  />
+                </div>
+                
+                {/* To Date */}
+                <div className="flex-1">
+                  <label className="text-xs text-gray-600 mb-1 block">To</label>
+                  <Calendar
+                    mode="single"
+                    selected={filter.to || undefined}
+                    onSelect={(date) => onFilterChange({ ...filter, to: date || null })}
+                    className="rounded-md border"
+                    disabled={(date) => filter.from ? date < filter.from : false}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Apply Button */}
+          <div className="mt-3 pt-3 border-t">
+            <Button
+              size="sm"
+              onClick={() => setIsOpen(false)}
+              className="w-full"
+            >
+              Apply Filter
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export default function ProfilesPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +286,17 @@ export default function ProfilesPage() {
   const [showNewProfilesOnly, setShowNewProfilesOnly] = useState(false)
   const [showNeedsEnrichmentOnly, setShowNeedsEnrichmentOnly] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null)
+  
+  // Date filter states
+  const [dateFilters, setDateFilters] = useState<{
+    latestPost: { from: Date | null; to: Date | null }
+    firstSeen: { from: Date | null; to: Date | null }
+    lastEnriched: { from: Date | null; to: Date | null }
+  }>({
+    latestPost: { from: null, to: null },
+    firstSeen: { from: null, to: null },
+    lastEnriched: { from: null, to: null }
+  })
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set())
   const [timelineDialog, setTimelineDialog] = useState<{
     isOpen: boolean
@@ -112,9 +339,6 @@ export default function ProfilesPage() {
 
   const isAllCurrentPageSelected = paginatedProfiles.length > 0 && 
     paginatedProfiles.every(p => selectedProfiles.has(p.id))
-
-  const isAllFilteredSelected = filteredProfiles.length > 0 && 
-    filteredProfiles.every(p => selectedProfiles.has(p.id))
 
   const isSomeCurrentPageSelected = paginatedProfiles.some(p => selectedProfiles.has(p.id))
 
@@ -280,7 +504,7 @@ export default function ProfilesPage() {
     // Reset to page 1 and clear selection when filters change
     setCurrentPage(1)
     setSelectedProfiles(new Set())
-  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly])
+  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, dateFilters])
 
   async function loadUser() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -695,6 +919,39 @@ export default function ProfilesPage() {
     return isNew
   }, [lastSyncTime])
 
+  // Date filter helper functions
+  const isDateInRange = (date: string | null, filter: { from: Date | null; to: Date | null }): boolean => {
+    if (!date || (!filter.from && !filter.to)) return true
+    
+    const dateObj = new Date(date)
+    const fromDate = filter.from ? startOfDay(filter.from) : null
+    const toDate = filter.to ? endOfDay(filter.to) : null
+    
+    if (fromDate && isBefore(dateObj, fromDate)) return false
+    if (toDate && isAfter(dateObj, toDate)) return false
+    
+    return true
+  }
+
+  const hasActiveDateFilters = (): boolean => {
+    return Object.values(dateFilters).some(filter => filter.from || filter.to)
+  }
+
+  const clearDateFilter = (filterType: keyof typeof dateFilters) => {
+    setDateFilters(prev => ({
+      ...prev,
+      [filterType]: { from: null, to: null }
+    }))
+  }
+
+  const clearAllDateFilters = () => {
+    setDateFilters({
+      latestPost: { from: null, to: null },
+      firstSeen: { from: null, to: null },
+      lastEnriched: { from: null, to: null }
+    })
+  }
+
   const loadEngagementTimeline = async (profile: Profile) => {
     setTimelineDialog(prev => ({ ...prev, isLoading: true, isOpen: true, profile, counts: undefined }))
     
@@ -870,6 +1127,26 @@ export default function ProfilesPage() {
       result = result.filter(profile => !profile.first_name || profile.first_name.trim() === '')
     }
 
+    // Apply date filters
+    result = result.filter(profile => {
+      // Latest post date filter
+      if (!isDateInRange(profile.latest_post_date, dateFilters.latestPost)) {
+        return false
+      }
+      
+      // First seen date filter
+      if (!isDateInRange(profile.first_seen, dateFilters.firstSeen)) {
+        return false
+      }
+      
+      // Last enriched date filter
+      if (!isDateInRange(profile.last_enriched_at, dateFilters.lastEnriched)) {
+        return false
+      }
+      
+      return true
+    })
+
     // Apply sorting
     result.sort((a, b) => {
       const valueA = getSortValue(a, sortBy)
@@ -890,7 +1167,7 @@ export default function ProfilesPage() {
     })
 
     setFilteredProfiles(result)
-  }, [profiles, searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, getSortValue, isNewProfile])
+  }, [profiles, searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, dateFilters, getSortValue, isNewProfile])
 
   // Effect to trigger filtering and sorting when dependencies change
   useEffect(() => {
@@ -1019,14 +1296,51 @@ export default function ProfilesPage() {
 
         {/* Search and Actions Bar */}
         {profiles.length > 0 && (
-          <div className="flex items-center justify-between mb-6">
-            <Input
-              placeholder="Search by name or headline..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-80"
-            />
-            <div className="flex items-center gap-2">
+          <div className="space-y-3 mb-4">
+            <div className="flex items-center justify-between">
+              <Input
+                placeholder="Search by name or headline..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-80"
+              />
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Date Filters */}
+                <span className="text-xs font-medium text-gray-500 mr-1 hidden sm:inline">Dates:</span>
+                <DateFilterComponent
+                  label="Latest Post"
+                  filter={dateFilters.latestPost}
+                  onFilterChange={(filter) => setDateFilters(prev => ({ ...prev, latestPost: filter }))}
+                  onClear={() => clearDateFilter('latestPost')}
+                />
+                <DateFilterComponent
+                  label="First Seen"
+                  filter={dateFilters.firstSeen}
+                  onFilterChange={(filter) => setDateFilters(prev => ({ ...prev, firstSeen: filter }))}
+                  onClear={() => clearDateFilter('firstSeen')}
+                />
+                <DateFilterComponent
+                  label="Last Enriched"
+                  filter={dateFilters.lastEnriched}
+                  onFilterChange={(filter) => setDateFilters(prev => ({ ...prev, lastEnriched: filter }))}
+                  onClear={() => clearDateFilter('lastEnriched')}
+                />
+                {hasActiveDateFilters() && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearAllDateFilters}
+                    className="h-7 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-end">
+              <div className="flex items-center gap-2">
               {selectedProfiles.size > 0 && (
                 <>
                   <Button
@@ -1068,6 +1382,7 @@ export default function ProfilesPage() {
                   </Button>
                 </>
               )}
+              </div>
             </div>
           </div>
         )}
@@ -1083,10 +1398,10 @@ export default function ProfilesPage() {
                   {selectedProfiles.size > 0 ? (
                     `${selectedProfiles.size} profile${selectedProfiles.size === 1 ? '' : 's'} selected`
                   ) : (
-                    (totalPages > 1 || searchTerm || showNewProfilesOnly || showNeedsEnrichmentOnly) && `Showing ${(currentPage - 1) * itemsPerPage + 1} to ${Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of ${filteredProfiles.length} profiles`
+                    (totalPages > 1 || searchTerm || showNewProfilesOnly || showNeedsEnrichmentOnly || hasActiveDateFilters()) && `Showing ${(currentPage - 1) * itemsPerPage + 1} to ${Math.min(currentPage * itemsPerPage, filteredProfiles.length)} of ${filteredProfiles.length} profiles`
                   )}
                 </div>
-                <div className="flex-1"></div>
+
                 {totalPages > 1 && (
                   <div className="flex items-center gap-2">
                   <Button
@@ -1620,3 +1935,4 @@ export default function ProfilesPage() {
     </div>
   )
 }
+
