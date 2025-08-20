@@ -1,0 +1,262 @@
+can you try implementing this apify actor -- @https://console.apify.com/organization/qna4adw3XF8iDtXgP/actors/UwSdACBp7ymaGUJjS/input 
+
+ to enrich companies with additional info , like 
+
+- website (original field from output)
+- domain (not in output, but you need to clean  - i.e. netflix.com, google.com, without https, and any other stuff)
+- employyee count
+- company industry
+- logo
+- country (put into company country field)
+- cirty (put into company city field)
+
+---
+
+here is example input:
+
+{
+  "companies": [
+    "https://www.linkedin.com/company/10123241/",
+    "https://www.linkedin.com/company/1901026/"
+  ]
+}
+
+
+__
+
+as an input -- List of LinkedIn profile URLs or Public Identifiers (last part in the URL) to scrape.
+
+process up to 100 companies in one batch / run. Up to 32 concurrent runs (actors runnong)
+
+__
+
+here is example output
+
+[
+  {
+    "id": "10123241",
+    "universalName": "level180",
+    "linkedinUrl": "https://www.linkedin.com/company/level180",
+    "name": "Level180",
+    "tagline": "Business-To-Business Sales Coaching",
+    "website": "http://www.level180.com",
+    "logo": "https://media.licdn.com/dms/image/v2/C560BAQHyMCfqNchHnQ/company-logo_400_400/company-logo_400_400/0/1645007795826/level180_logo?e=1758758400&v=beta&t=sS9o8TX4Su6DpdDqgX_eBrbppx54F253nZz7EADlo7o",
+    "foundedOn": {
+      "year": 2014
+    },
+    "employeeCount": 9,
+    "employeeCountRange": {
+      "start": 2,
+      "end": 10
+    },
+    "followerCount": 2583,
+    "description": "We use proven sales methodologies, combined with the latest technology, to significantly increase sales revenue within your organisation. We analyse your entire sales process from lead generation, through acquisition and account management, to churn so that we can define an end to end sales strategy across your entire client lifecylce, with one single goal; for you to achieve Rapid Sales Growth. We provide you with the processes and technology to ensure you nail your strategy.",
+    "companyType": "Privately Held",
+    "locations": [
+      {
+        "country": "ZA",
+        "geographicArea": "Gauteng",
+        "city": "Johannesburg",
+        "line1": "26 Peter Pl",
+        "headquarter": true,
+        "parsed": {
+          "text": "Johannesburg, South Africa",
+          "countryCode": "ZA",
+          "regionCode": null,
+          "country": "South Africa",
+          "countryFull": "South Africa",
+          "state": "Gauteng",
+          "city": "Johannesburg"
+        }
+      }
+    ],
+    "specialities": [
+      "Sales Strategy",
+      "CRM",
+      "Sales Process",
+      "Marketing Strategy",
+      "Target Setting",
+      "Forecasting"
+    ],
+    "industries": [
+      "Business Consulting and Services"
+    ],
+    "logos": [
+      {
+        "url": "https://media.licdn.com/dms/image/v2/C560BAQHyMCfqNchHnQ/company-logo_400_400/company-logo_400_400/0/1645007795826/level180_logo?e=1758758400&v=beta&t=sS9o8TX4Su6DpdDqgX_eBrbppx54F253nZz7EADlo7o",
+        "width": 400,
+        "height": 400,
+        "expiresAt": 1758758400000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/C560BAQHyMCfqNchHnQ/company-logo_200_200/company-logo_200_200/0/1645007795826/level180_logo?e=1758758400&v=beta&t=YiqRUD8rHi0BGkC9vbVInZLTy_upMWwgakd_GyDwaY8",
+        "width": 200,
+        "height": 200,
+        "expiresAt": 1758758400000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/C560BAQHyMCfqNchHnQ/company-logo_100_100/company-logo_100_100/0/1645007795826/level180_logo?e=1758758400&v=beta&t=r018zdxbiH29Tv_D-KMCNw1yhomx3c_U7GAgpmWm0MY",
+        "width": 100,
+        "height": 100,
+        "expiresAt": 1758758400000
+      }
+    ],
+    "backgroundCover": "https://media.licdn.com/dms/image/v2/C561BAQHfdVgYPt0jzQ/company-background_10000/company-background_10000/0/1645550140811/level180_cover?e=1756288800&v=beta&t=85PSVkFGlXokRA5V1g9k3YplNjjJO5kHehy9fu9cms4",
+    "backgroundCovers": [
+      {
+        "url": "https://media.licdn.com/dms/image/v2/C561BAQHfdVgYPt0jzQ/company-background_10000/company-background_10000/0/1645550140811/level180_cover?e=1756288800&v=beta&t=85PSVkFGlXokRA5V1g9k3YplNjjJO5kHehy9fu9cms4",
+        "width": 1911,
+        "height": 552,
+        "expiresAt": 1756288800000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/C561BAQHfdVgYPt0jzQ/company-background_400/company-background_400/0/1645550140811/level180_cover?e=1756288800&v=beta&t=o1ei8fvtZSLS8Sa6yN1h86sEvBnJ78wdZnh42hIrNbk",
+        "width": 400,
+        "height": 115,
+        "expiresAt": 1756288800000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/C561BAQHfdVgYPt0jzQ/company-background_200/company-background_200/0/1645550140811/level180_cover?e=1756288800&v=beta&t=p_yJodfo-ftvQ7x_4JL8SD572GcbVHmjtWXKuUc4nSE",
+        "width": 200,
+        "height": 57,
+        "expiresAt": 1756288800000
+      }
+    ],
+    "autoGenerated": false,
+    "callToActionUrl": "https://www.linkedin.com/services/page/454a2a3078b479995a",
+    "similarOrganizations": [],
+    "originalQuery": {
+      "search": "https://www.linkedin.com/company/10123241/",
+      "location": ""
+    },
+    "requestId": "61b25b49-5cf9-4ce8-8b9e-e3b5de3a50bf"
+  },
+  {
+    "id": "1901026",
+    "universalName": "naturalintelligence2",
+    "linkedinUrl": "https://www.linkedin.com/company/naturalintelligence2",
+    "name": "Natural Intelligence",
+    "tagline": "Managing one of the largest, most diversified performance-marketing portfolios on the planet.",
+    "website": "http://www.naturalint.com",
+    "logo": "https://media.licdn.com/dms/image/v2/D4D0BAQHqkFYhVeWeIw/company-logo_400_400/B4DZfuIxLlGsAc-/0/1752046965890/naturalintelligence2_logo?e=1758758400&v=beta&t=xDlyJzyV4fbAXechiC8v_qRUfincD_28BUrWEgOsNF8",
+    "foundedOn": {
+      "year": 2009
+    },
+    "employeeCount": 557,
+    "employeeCountRange": {
+      "start": 501,
+      "end": 1000
+    },
+    "followerCount": 58281,
+    "description": "Natural Intelligence (est. 2009) is a global leader in intent marketing connecting millions of users with top brands through our comparison platforms. Our technology touches the consumer in every step of the journey, from the ads they watch to the decision-making user experiences all the way to purchasing on brands’ websites. As one of Google's top 30 advertisers worldwide, we facilitate over 60 million purchase decisions annually across 90+ categories, generating $700M+ in affiliate revenue.\n\nWe maximize brand exposure and drive conversions by connecting high-intent consumers with leading brands across financial services, insurance, marketing tools, and more. Our xMatch platform leverages AI to revolutionize online comparison shopping and serves millions of users from 200+ countries, delivering premium comparison experiences and qualified leads at scale.\n\nPublishers partner with us to unlock revenue through customizable comparison widgets and optimized commerce content, maintaining the highest user experience standards. For brands, we provide unmatched access to consumers at their moment of purchase decision. \n\nOur team of 500+ professionals, led by founder Nir Greenberg and CEO Jonathan Edelshaim, drives innovation through collective expertise, a growth-mindset and cutting-edge technology, including advanced GenAI solutions. We've achieved market leadership while remaining bootstrapped. \n\nRecognized as one of the best hi-tech companies to work for, we offer competitive compensation, prioritize internal mobility, and invest heavily in professional development. Our diverse team, with 52% women workforce and 43% women in management, drives innovation while making meaningful social impact through community partnerships and support programs.\n\nVisit naturalint.com to explore partnership opportunities or join our mission to simplify decision making worldwide!",
+    "companyType": "Privately Held",
+    "locations": [
+      {
+        "country": "IL",
+        "geographicArea": "Israel",
+        "city": "Tel-Aviv",
+        "line1": "Totzeret Haaretz St. 6, ",
+        "line2": "Floor 23",
+        "postalCode": "6744129",
+        "headquarter": true,
+        "description": "ToHa Building",
+        "parsed": {
+          "text": "Tel Aviv, Israel",
+          "countryCode": "IL",
+          "regionCode": null,
+          "country": "Israel",
+          "countryFull": "Israel",
+          "state": "Tel Aviv District",
+          "city": "Tel Aviv"
+        }
+      },
+      {
+        "country": "ES",
+        "city": "Madrid",
+        "headquarter": false,
+        "parsed": {
+          "text": "Madrid, Spain",
+          "countryCode": "ES",
+          "regionCode": null,
+          "country": "Spain",
+          "countryFull": "Spain",
+          "state": "Madrid",
+          "city": "Madrid"
+        }
+      }
+    ],
+    "specialities": [
+      "Shopping comparison",
+      "Intent Marketing",
+      "SEM",
+      "Comparison Websites",
+      "Lead Generation",
+      "Performance Marketing",
+      "Partnerships",
+      "Affiliate Marketing",
+      "Growth Marketing",
+      "Insurance",
+      "Fintech",
+      "Credit Cards",
+      "Publishers",
+      "monetization solutions",
+      "Newsletter Marketing"
+    ],
+    "industries": [
+      "Software Development"
+    ],
+    "logos": [
+      {
+        "url": "https://media.licdn.com/dms/image/v2/D4D0BAQHqkFYhVeWeIw/company-logo_400_400/B4DZfuIxLlGsAc-/0/1752046965890/naturalintelligence2_logo?e=1758758400&v=beta&t=xDlyJzyV4fbAXechiC8v_qRUfincD_28BUrWEgOsNF8",
+        "width": 400,
+        "height": 400,
+        "expiresAt": 1758758400000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/D4D0BAQHqkFYhVeWeIw/company-logo_200_200/B4DZfuIxLlGsAM-/0/1752046965890/naturalintelligence2_logo?e=1758758400&v=beta&t=DST3IvJrVCV-VGGrvaty5SOTP4GbIWN0BvexTsR4ZIU",
+        "width": 200,
+        "height": 200,
+        "expiresAt": 1758758400000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/D4D0BAQHqkFYhVeWeIw/company-logo_100_100/B4DZfuIxLlGsAU-/0/1752046965890/naturalintelligence2_logo?e=1758758400&v=beta&t=x-fnfBYDKqwUrK7JCZ6v-CasSqr21nB-Jo3bFKPrQ74",
+        "width": 100,
+        "height": 100,
+        "expiresAt": 1758758400000
+      }
+    ],
+    "backgroundCover": "https://media.licdn.com/dms/image/v2/D4E3DAQEXrKQwHis0cQ/image-scale_191_1128/image-scale_191_1128/0/1724751263258/naturalintelligence2_cover?e=1756288800&v=beta&t=AYkbedwjhC8cKO4Q7hzsDK0lp8vBkNRf7hB8zZ61u5E",
+    "backgroundCovers": [
+      {
+        "url": "https://media.licdn.com/dms/image/v2/D4E3DAQEXrKQwHis0cQ/image-scale_191_1128/image-scale_191_1128/0/1724751263258/naturalintelligence2_cover?e=1756288800&v=beta&t=AYkbedwjhC8cKO4Q7hzsDK0lp8vBkNRf7hB8zZ61u5E",
+        "width": 1128,
+        "height": 191,
+        "expiresAt": 1756288800000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/D4E3DAQEXrKQwHis0cQ/image-scale_127_750/image-scale_127_750/0/1724751263252/naturalintelligence2_cover?e=1756288800&v=beta&t=P7wtquGz9tuiQmHvgjI1EvOuuDiDmRmJ-rA5JEstx6A",
+        "width": 750,
+        "height": 126,
+        "expiresAt": 1756288800000
+      },
+      {
+        "url": "https://media.licdn.com/dms/image/v2/D4E3DAQEXrKQwHis0cQ/image-scale_108_640/image-scale_108_640/0/1724751263252/naturalintelligence2_cover?e=1756288800&v=beta&t=CAM5tYDEx4mgGoIMEPFMET-NjQOd7ODV7QdJh7kwcys",
+        "width": 108,
+        "height": 18,
+        "expiresAt": 1756288800000
+      }
+    ],
+    "autoGenerated": false,
+    "callToActionUrl": "http://www.naturalint.com",
+    "similarOrganizations": [],
+    "originalQuery": {
+      "search": "https://www.linkedin.com/company/1901026/",
+      "location": ""
+    },
+    "requestId": "25bc0385-2f27-4fa7-807f-0c19391aa179"
+  }
+]
+
+__
+
+For test, create button enrich companies in UI.

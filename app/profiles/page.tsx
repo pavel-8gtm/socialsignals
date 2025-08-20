@@ -13,7 +13,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Calendar } from '@/components/ui/calendar'
-import { ChevronDown, CalendarIcon, X } from 'lucide-react'
+import { ChevronDown, CalendarIcon, X, Send } from 'lucide-react'
 import { format, startOfDay, endOfDay, subDays, subWeeks, subMonths, isAfter, isBefore } from 'date-fns'
 import type { Database } from '@/lib/types/database.types'
 
@@ -38,6 +38,7 @@ type Profile = Database['public']['Tables']['profiles']['Row'] & {
   reaction_types?: string[]
   latest_post_date?: string
   latest_post_url?: string
+  latest_engagement_type?: 'Like' | 'Comment' | ''
   posts?: Array<{
     post_id: string
     post_url: string
@@ -46,6 +47,14 @@ type Profile = Database['public']['Tables']['profiles']['Row'] & {
     comment_text?: string
     created_at: string
   }>
+}
+
+interface Webhook {
+  id: string;
+  name: string;
+  url: string;
+  description: string | null;
+  is_active: boolean;
 }
 
 // Date Filter Component
@@ -280,6 +289,7 @@ export default function ProfilesPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [isEnriching, setIsEnriching] = useState(false)
+
   const [enrichmentProgress, setEnrichmentProgress] = useState<{
     progress: number
     total: number
@@ -323,6 +333,11 @@ export default function ProfilesPage() {
     timeline: [],
     isLoading: false
   })
+  
+  // Webhook state
+  const [webhooks, setWebhooks] = useState<Webhook[]>([])
+  const [isWebhookPushing, setIsWebhookPushing] = useState(false)
+  
   const supabase = createClient()
 
   // Selection management functions
@@ -370,23 +385,24 @@ export default function ProfilesPage() {
       'Name',
       'First Name',
       'Last Name',
-      'Headline', 
-      'Profile URL',
       'URN',
-      'First Seen',
-      'Last Updated',
-      'Last Enriched',
-      'Total Reactions',
-      'Total Comments',
-      'Posts Engaged With',
-      'Last Engaged Post URL',
-      'Last Engaged Post Date',
+      'Profile URL',
+      'Profile Picture URL',
+      'Country',
+      'City',
+      'Headline',
       'Current Title',
       'Current Company',
       'Company LinkedIn URL',
-      'City',
-      'Country',
-      'Profile Picture URL'
+      'Last Engaged Post Date',
+      'Last Engaged Post URL',
+      'Reaction Type',
+      'Total Reactions',
+      'Total Comments',
+      'Posts Engaged With',
+      'First Seen',
+      'Last Updated',
+      'Last Enriched'
     ]
     
     const rows = profilesToCopy.map(profile => [
@@ -395,23 +411,24 @@ export default function ProfilesPage() {
         : profile.name || '',
       profile.first_name || '',
       profile.last_name || '',
-      profile.headline || '',
-      profile.profile_url || '',
       profile.urn || '',
-      formatDateISO(profile.first_seen),
-      formatDateISO(profile.last_updated),
-      formatDateISO(profile.last_enriched_at),
-      String(profile.total_reactions || 0),
-      String(profile.total_comments || 0),
-      String(profile.posts_engaged_with || 0),
-      profile.latest_post_url || '',
-      formatDateISO(profile.latest_post_date),
+      profile.profile_url || '',
+      profile.profile_picture_url || profile.profile_pictures?.small || '',
+      profile.country || '',
+      profile.city || '',
+      profile.headline || '',
       profile.current_title || '',
       profile.current_company || '',
       profile.company_linkedin_url || '',
-      profile.city || '',
-      profile.country || '',
-      profile.profile_picture_url || profile.profile_pictures?.small || ''
+      formatDateISO(profile.latest_post_date),
+      profile.latest_post_url || '',
+      profile.latest_engagement_type || '',
+      String(profile.total_reactions || 0),
+      String(profile.total_comments || 0),
+      String(profile.posts_engaged_with || 0),
+      formatDateISO(profile.first_seen),
+      formatDateISO(profile.last_updated),
+      formatDateISO(profile.last_enriched_at)
     ])
 
     // Join with tabs for columns and newlines for rows
@@ -450,23 +467,24 @@ export default function ProfilesPage() {
           : profile.name || '',
         'First Name': profile.first_name || '',
         'Last Name': profile.last_name || '',
-        'Headline': profile.headline || '',
-        'Profile URL': profile.profile_url || '',
         'URN': profile.urn || '',
-        'First Seen': formatDateISO(profile.first_seen),
-        'Last Updated': formatDateISO(profile.last_updated),
-        'Last Enriched': formatDateISO(profile.last_enriched_at),
-        'Total Reactions': profile.total_reactions || 0,
-        'Total Comments': profile.total_comments || 0,
-        'Posts Engaged With': profile.posts_engaged_with || 0,
-        'Last Engaged Post URL': profile.latest_post_url || '',
-        'Last Engaged Post Date': formatDateISO(profile.latest_post_date),
+        'Profile URL': profile.profile_url || '',
+        'Profile Picture URL': profile.profile_picture_url || '',
+        'Country': profile.country || '',
+        'City': profile.city || '',
+        'Headline': profile.headline || '',
         'Current Title': profile.current_title || '',
         'Current Company': profile.current_company || '',
         'Company LinkedIn URL': profile.company_linkedin_url || '',
-        'City': profile.city || '',
-        'Country': profile.country || '',
-        'Profile Picture URL': profile.profile_picture_url || ''
+        'Last Engaged Post Date': formatDateISO(profile.latest_post_date),
+        'Last Engaged Post URL': profile.latest_post_url || '',
+        'Reaction Type': profile.latest_engagement_type || '',
+        'Total Reactions': profile.total_reactions || 0,
+        'Total Comments': profile.total_comments || 0,
+        'Posts Engaged With': profile.posts_engaged_with || 0,
+        'First Seen': formatDateISO(profile.first_seen),
+        'Last Updated': formatDateISO(profile.last_updated),
+        'Last Enriched': formatDateISO(profile.last_enriched_at)
       }
     })
 
@@ -784,6 +802,34 @@ export default function ProfilesPage() {
           return postDate > latestDate ? post : latest
         }, null as any)
 
+        // Determine the latest engagement type (Like or Comment)
+        // Find the most recent post this profile engaged with, then check engagement type
+        let latestEngagementType: 'Like' | 'Comment' | '' = ''
+        
+        // Get reactions and comments for this profile
+        const profileReactions = reactionsByProfile.get(profileId) || []
+        const profileComments = commentsByProfile.get(profileId) || []
+        
+        if (latestPost && latestPost.post_id) {
+          // Check if they reacted to the latest post
+          const reactedToLatestPost = profileReactions.some(reaction => 
+            reaction.post && reaction.post.post_id === latestPost.post_id
+          )
+          
+          // Check if they commented on the latest post
+          const commentedOnLatestPost = profileComments.some(comment => 
+            comment.post && comment.post.post_id === latestPost.post_id
+          )
+          
+          // If they did both on the same post, prefer Comment
+          // If they only did one, use that type
+          if (commentedOnLatestPost) {
+            latestEngagementType = 'Comment'
+          } else if (reactedToLatestPost) {
+            latestEngagementType = 'Like'
+          }
+        }
+
         // Store in profiles map
         profilesMap.set(profileId, {
           ...profile,
@@ -792,7 +838,8 @@ export default function ProfilesPage() {
           posts_engaged_with: totalPosts,
           latest_post_date: latestPostDate,
           latest_post_url: latestPost?.post_url || null,
-          reaction_types: reactions.map(r => r.reaction_type).filter((v, i, a) => a.indexOf(v) === i),
+          latest_engagement_type: latestEngagementType,
+          reaction_types: profileReactions.map(r => r.reaction_type).filter((v, i, a) => a.indexOf(v) === i),
           posts: uniquePosts.map(post => ({
             post_id: post.post_id,
             post_url: post.post_url,
@@ -805,6 +852,37 @@ export default function ProfilesPage() {
       })
 
       const profilesArray = Array.from(profilesMap.values())
+      
+      // Debug specific users with data issues
+      const brittProfile = profilesArray.find(p => p.name?.includes('Britt F. Gage'))
+      if (brittProfile) {
+        console.log('🐛 Britt F. Gage data:', {
+          name: brittProfile.name,
+          current_company: brittProfile.current_company,
+          city: brittProfile.city,
+          country: brittProfile.country
+        })
+      }
+      
+      const moizProfile = profilesArray.find(p => p.name?.includes('Moiz Sakarwala'))
+      if (moizProfile) {
+        console.log('🐛 Moiz Sakarwala data:', {
+          name: moizProfile.name,
+          current_company: moizProfile.current_company,
+          city: moizProfile.city,
+          country: moizProfile.country
+        })
+      }
+      
+      const jimProfile = profilesArray.find(p => p.name?.includes('Jim Kingsbury'))
+      if (jimProfile) {
+        console.log('🐛 Jim Kingsbury data:', {
+          name: jimProfile.name,
+          current_company: jimProfile.current_company,
+          city: jimProfile.city,
+          country: jimProfile.country
+        })
+      }
       
       // Debug Yoav's final counts
       const yoavProfile = profilesArray.find(p => p.name?.includes('Yoav Eitani'))
@@ -915,6 +993,8 @@ export default function ProfilesPage() {
     }
   }
 
+
+
   // Helper function to check if a profile is new (discovered since last sync)
   const isNewProfile = useCallback((profile: Profile): boolean => {
     if (!profile.first_seen) return false
@@ -963,6 +1043,65 @@ export default function ProfilesPage() {
       firstSeen: { from: null, to: null },
       lastEnriched: { from: null, to: null }
     })
+  }
+
+  // Webhook functions
+  const loadWebhooks = async () => {
+    try {
+      const response = await fetch('/api/webhooks')
+      const data = await response.json()
+      
+      if (response.ok) {
+        setWebhooks(data.webhooks?.filter((w: Webhook) => w.is_active) || [])
+      } else {
+        console.error('Failed to load webhooks:', data.error)
+      }
+    } catch (error) {
+      console.error('Error loading webhooks:', error)
+    }
+  }
+
+  const pushToWebhook = async (webhookId: string) => {
+    if (selectedProfiles.size === 0) {
+      setError('Please select profiles to push')
+      return
+    }
+
+    setIsWebhookPushing(true)
+    setError(null)
+    setSuccess(null)
+
+    try {
+      const profileIds = Array.from(selectedProfiles)
+      
+      const response = await fetch('/api/webhooks/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ webhookId, profileIds }),
+      })
+
+      const result = await response.json()
+
+      if (response.ok) {
+        setSuccess(`Successfully pushed ${result.pushed_successfully} profiles to ${result.webhook_name}!`)
+        
+        if (result.errors && result.errors.length > 0) {
+          setError(`Some profiles failed to push: ${result.errors.slice(0, 3).join(', ')}${result.errors.length > 3 ? ' and more...' : ''}`)
+        }
+
+        // Clear selection
+        setSelectedProfiles(new Set())
+      } else {
+        setError(result.error || 'Failed to push profiles to webhook')
+      }
+    } catch (error) {
+      console.error('Error pushing to webhook:', error)
+      setError('Failed to push profiles to webhook')
+    } finally {
+      setIsWebhookPushing(false)
+    }
   }
 
   const loadEngagementTimeline = async (profile: Profile) => {
@@ -1187,6 +1326,11 @@ export default function ProfilesPage() {
     filterAndSortProfiles()
   }, [filterAndSortProfiles])
 
+  // Load webhooks on component mount
+  useEffect(() => {
+    loadWebhooks()
+  }, [])
+
   function paginateProfiles() {
     const startIndex = (currentPage - 1) * itemsPerPage
     const endIndex = startIndex + itemsPerPage
@@ -1352,31 +1496,32 @@ export default function ProfilesPage() {
               </div>
             </div>
             
-            <div className="flex items-center justify-end">
-              <div className="flex items-center gap-2">
-              {selectedProfiles.size > 0 && (
-                <>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={enrichSelectedProfiles}
-                    disabled={isEnriching}
-                    className="whitespace-nowrap"
-                  >
-                    {isEnriching ? (
-                      <>
-                        <div className="h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        Enriching...
-                      </>
-                    ) : (
-                      <>
-                        <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                        Enrich ({selectedProfiles.size})
-                      </>
-                    )}
-                  </Button>
+            {/* Action Buttons Row */}
+            {selectedProfiles.size > 0 && (
+              <div className="flex items-center justify-between">
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={enrichSelectedProfiles}
+                  disabled={isEnriching}
+                  className="whitespace-nowrap"
+                >
+                  {isEnriching ? (
+                    <>
+                      <div className="h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Enriching...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      Enrich ({selectedProfiles.size})
+                    </>
+                  )}
+                </Button>
+                
+                <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
@@ -1393,10 +1538,46 @@ export default function ProfilesPage() {
                   >
                     Export CSV ({selectedProfiles.size})
                   </Button>
-                </>
-              )}
+                  {webhooks.length > 0 && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isWebhookPushing}
+                          className="whitespace-nowrap"
+                        >
+                          {isWebhookPushing ? (
+                            <>
+                              <div className="h-4 w-4 mr-2 border-2 border-gray-600 border-t-transparent rounded-full animate-spin" />
+                              Pushing...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="h-4 w-4 mr-2" />
+                              Webhook Push ({selectedProfiles.size})
+                              <ChevronDown className="h-4 w-4 ml-1" />
+                            </>
+                          )}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {webhooks.map((webhook) => (
+                          <DropdownMenuItem
+                            key={webhook.id}
+                            onClick={() => pushToWebhook(webhook.id)}
+                            disabled={isWebhookPushing}
+                          >
+                            <Send className="h-4 w-4 mr-2" />
+                            {webhook.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -1573,6 +1754,9 @@ export default function ProfilesPage() {
                         )}
                       </div>
                     </TableHead>
+                    <TableHead className="min-w-[100px]">
+                      Reaction Type
+                    </TableHead>
                     <TableHead 
                       className="cursor-pointer hover:bg-gray-50 select-none"
                       onClick={() => handleSort('first_seen')}
@@ -1695,7 +1879,7 @@ export default function ProfilesPage() {
                             
                             {/* Current Company */}
                             {profile.current_company && (
-                              <div className="text-xs text-gray-600 truncate mt-0.5">
+                              <div className="text-xs text-gray-600 mt-0.5">
                                 {profile.company_linkedin_url ? (
                                   <a
                                     href={profile.company_linkedin_url}
@@ -1713,7 +1897,7 @@ export default function ProfilesPage() {
                             
                             {/* Location */}
                             {(profile.city || profile.country) && (
-                              <div className="text-xs text-gray-500 truncate mt-0.5">
+                              <div className="text-xs text-gray-500 mt-0.5">
                                 📍 {[profile.city, profile.country].filter(Boolean).join(', ')}
                               </div>
                             )}
@@ -1745,6 +1929,17 @@ export default function ProfilesPage() {
                             : 'Unknown'
                           }
                         </button>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          {profile.latest_engagement_type ? (
+                            <Badge variant={profile.latest_engagement_type === 'Like' ? 'default' : 'secondary'}>
+                              {profile.latest_engagement_type}
+                            </Badge>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <div className="text-sm">
