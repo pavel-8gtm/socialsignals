@@ -371,7 +371,7 @@ export default function ProfilesPage() {
   const isSomeCurrentPageSelected = paginatedProfiles.some(p => selectedProfiles.has(p.id))
 
   // Copy to Clipboard function (for Google Sheets)
-  const copyToClipboard = async () => {
+  const copyToClipboard = async (includeHeaders: boolean = true) => {
     // Only copy selected profiles
     const profilesToCopy = filteredProfiles.filter(p => selectedProfiles.has(p.id))
 
@@ -432,13 +432,16 @@ export default function ProfilesPage() {
     ])
 
     // Join with tabs for columns and newlines for rows
-    const tsvContent = [headers.join('\t'), ...rows.map(row => row.join('\t'))].join('\n')
+    const tsvContent = includeHeaders 
+      ? [headers.join('\t'), ...rows.map(row => row.join('\t'))].join('\n')
+      : rows.map(row => row.join('\t')).join('\n')
 
     try {
       await navigator.clipboard.writeText(tsvContent)
       
       // Show success feedback
-      setSuccess(`Copied ${profilesToCopy.length} profiles to clipboard! Ready to paste in Google Sheets.`)
+      const headerText = includeHeaders ? 'with headers' : 'without headers'
+      setSuccess(`Copied ${profilesToCopy.length} profiles to clipboard ${headerText}! Ready to paste in Google Sheets.`)
       setTimeout(() => setSuccess(null), 3000)
     } catch (error) {
       console.error('Failed to copy to clipboard:', error)
@@ -516,54 +519,12 @@ export default function ProfilesPage() {
     document.body.removeChild(link)
   }
 
-  useEffect(() => {
-    loadUser()
-  }, [loadUser])
-
-  useEffect(() => {
-    if (user) {
-      loadProfiles()
-      loadLastSyncTime()
-    }
-  }, [user])
-
-  useEffect(() => {
-    paginateProfiles()
-  }, [filteredProfiles, currentPage])
-
-  useEffect(() => {
-    // Reset to page 1 and clear selection when filters change
-    setCurrentPage(1)
-    setSelectedProfiles(new Set())
-  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, dateFilters])
-
-  async function loadUser() {
+  const loadUser = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     setUser(user)
-  }
+  }, [supabase.auth])
 
-  async function loadLastSyncTime() {
-    if (!user?.id) return
-    
-    try {
-      const { data, error } = await supabase
-        .from('user_settings')
-        .select('last_sync_time')
-        .eq('user_id', user.id)
-        .single()
-      
-      if (error) {
-        console.error('Error loading last sync time:', error)
-      } else {
-        setLastSyncTime(data?.last_sync_time || null)
-        console.log('Loaded last sync time:', data?.last_sync_time)
-      }
-    } catch (error) {
-      console.error('Error loading last sync time:', error)
-    }
-  }
-
-  async function loadProfiles() {
+  const loadProfiles = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     try {
@@ -904,7 +865,47 @@ export default function ProfilesPage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [user, supabase])
+
+  const loadLastSyncTime = useCallback(async () => {
+    if (!user?.id) return
+    
+    try {
+      const { data, error } = await supabase
+        .from('user_settings')
+        .select('last_sync_time')
+        .eq('user_id', user.id)
+        .single()
+
+      if (!error && data?.last_sync_time) {
+        setLastSyncTime(data.last_sync_time)
+      }
+    } catch {
+      // Ignore errors for last sync time
+    }
+  }, [user?.id, supabase])
+
+  useEffect(() => {
+    loadUser()
+  }, [loadUser])
+
+  useEffect(() => {
+    if (user) {
+      loadProfiles()
+      loadLastSyncTime()
+    }
+  }, [user, loadProfiles, loadLastSyncTime])
+
+  useEffect(() => {
+    paginateProfiles()
+  }, [filteredProfiles, currentPage])
+
+  useEffect(() => {
+    // Reset to page 1 and clear selection when filters change
+    setCurrentPage(1)
+    setSelectedProfiles(new Set())
+  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, dateFilters])
+
 
   const handleSort = (column: 'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company') => {
     if (sortBy === column) {
@@ -1522,14 +1523,35 @@ export default function ProfilesPage() {
                 </Button>
                 
                 <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={copyToClipboard}
-                    className="whitespace-nowrap"
-                  >
-                    Copy to Clipboard ({selectedProfiles.size})
-                  </Button>
+                  <div className="flex">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => copyToClipboard(true)}
+                      className="whitespace-nowrap rounded-r-none border-r-0"
+                    >
+                      Copy to Clipboard ({selectedProfiles.size})
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="rounded-l-none px-2 border-l border-gray-300"
+                        >
+                          <ChevronDown className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => copyToClipboard(true)}>
+                          Copy with headers
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => copyToClipboard(false)}>
+                          Copy without headers
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
