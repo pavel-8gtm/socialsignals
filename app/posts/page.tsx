@@ -619,6 +619,7 @@ export default function PostsPage() {
         const { data, error } = await supabase
           .from('reactions')
           .select(`
+            id,
             reaction_type,
             scraped_at,
             profiles!inner(
@@ -633,11 +634,21 @@ export default function PostsPage() {
 
         if (error) throw error
         
-        setEngagementData({ post, type, profiles: data || [] })
+        // Deduplicate profiles for reactions - show unique people only
+        const uniqueProfiles = new Map()
+        data?.forEach(item => {
+          const profileId = (item.profiles as Record<string, unknown>)?.id as string
+          if (profileId && !uniqueProfiles.has(profileId)) {
+            uniqueProfiles.set(profileId, item)
+          }
+        })
+        
+        setEngagementData({ post, type, profiles: Array.from(uniqueProfiles.values()) })
       } else {
         const { data, error } = await supabase
           .from('comments')
           .select(`
+            id,
             comment_text,
             posted_at_date,
             scraped_at,
@@ -653,7 +664,16 @@ export default function PostsPage() {
 
         if (error) throw error
         
-        setEngagementData({ post, type, profiles: data || [] })
+        // Deduplicate profiles for comments - show unique people only
+        const uniqueProfiles = new Map()
+        data?.forEach(item => {
+          const profileId = (item.profiles as Record<string, unknown>)?.id as string
+          if (profileId && !uniqueProfiles.has(profileId)) {
+            uniqueProfiles.set(profileId, item)
+          }
+        })
+        
+        setEngagementData({ post, type, profiles: Array.from(uniqueProfiles.values()) })
       }
       
       setShowEngagementDialog(true)
@@ -2270,7 +2290,7 @@ export default function PostsPage() {
                 {engagementData?.type === 'reactions' ? 'People Who Reacted' : 'People Who Commented'}
               </DialogTitle>
               <DialogDescription>
-                {engagementData?.profiles.length || 0} {engagementData?.type} on Post {engagementData?.post?.post_id}
+                {engagementData?.profiles.length || 0} unique {engagementData?.type === 'reactions' ? 'people who reacted' : 'people who commented'} on Post {engagementData?.post?.post_id}
               </DialogDescription>
             </DialogHeader>
             
@@ -2286,7 +2306,7 @@ export default function PostsPage() {
               ) : (
                 <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
                   {engagementData?.profiles.map((profile: Record<string, unknown>, index: number) => (
-                    <div key={(profile.profiles as Record<string, unknown>)?.id as string || index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                    <div key={profile.id as string || index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
                       <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
                         {((profile.profiles as Record<string, unknown>)?.name as string)?.charAt(0)?.toUpperCase() || '?'}
                       </div>
