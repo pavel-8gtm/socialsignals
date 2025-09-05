@@ -708,33 +708,52 @@ export default function PostsPage() {
       ]
       
       progressTracking.startProgress('Fetching Post Metadata', initialSteps, postIds.length)
+      progressTracking.updateStep('init', { id: 'init', label: 'Starting metadata scraping...', status: 'running' })
 
-      // Start the progress-enabled metadata fetching
-      const response = await fetch('/api/scrape/post-metadata-progress', {
+      // Get auth token for Edge Functions
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        throw new Error('No authentication session found')
+      }
+
+      progressTracking.updateStep('init', { id: 'init', label: 'Authentication verified', status: 'completed' })
+      progressTracking.updateStep('scraping', { id: 'scraping', label: 'Fetching metadata...', status: 'running' })
+
+      // Call Edge Function directly
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-metadata`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           postIds: postIds,
         }),
       })
 
-      const result = await response.json()
-
       if (!response.ok) {
-        progressTracking.updateStep('init', {
-          id: 'init',
-          label: 'Failed to start',
+        const errorText = await response.text()
+        progressTracking.updateStep('scraping', {
+          id: 'scraping',
+          label: 'Failed to fetch metadata',
           status: 'error',
-          errorMessage: result.error || 'Failed to fetch metadata'
+          errorMessage: errorText
         })
         progressTracking.completeProgress()
-        throw new Error(result.error || 'Failed to fetch metadata')
+        throw new Error(errorText || 'Failed to fetch metadata')
       }
 
-      // Start polling for progress
-      await pollProgress(result.progressId, '/api/scrape/post-metadata-progress')
+      const result = await response.json()
+      
+      progressTracking.updateStep('scraping', { 
+        id: 'scraping', 
+        label: `Metadata completed (${result.processedPosts || 0} posts processed)`, 
+        status: 'completed' 
+      })
+      progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
+      progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
+      progressTracking.updateProgress(100)
+      progressTracking.completeProgress()
       
     } catch (error) {
       console.error('Error fetching metadata for new posts:', error)
@@ -758,31 +777,50 @@ export default function PostsPage() {
       ]
       
       progressTracking.startProgress('Scraping Reactions', initialSteps, postIds.length)
+      progressTracking.updateStep('init', { id: 'init', label: 'Starting reactions scraping...', status: 'running' })
 
-      // Start the progress-enabled reactions scraping
-      const response = await fetch('/api/scrape/reactions-progress', {
+      // Get auth token for Edge Functions
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        throw new Error('No authentication session found')
+      }
+
+      progressTracking.updateStep('init', { id: 'init', label: 'Authentication verified', status: 'completed' })
+      progressTracking.updateStep('scraping', { id: 'scraping', label: 'Scraping reactions...', status: 'running' })
+
+      // Call Edge Function directly
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-reactions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({ postIds }),
       })
 
-      const result = await response.json()
-
       if (!response.ok) {
-        progressTracking.updateStep('init', {
-          id: 'init',
-          label: 'Failed to start',
+        const errorText = await response.text()
+        progressTracking.updateStep('scraping', {
+          id: 'scraping',
+          label: 'Failed to scrape reactions',
           status: 'error',
-          errorMessage: result.error || 'Failed to scrape reactions'
+          errorMessage: errorText
         })
         progressTracking.completeProgress()
-        throw new Error(result.error || 'Failed to scrape reactions')
+        throw new Error(errorText || 'Failed to scrape reactions')
       }
 
-      // Start polling for progress
-      await pollProgress(result.progressId, '/api/scrape/reactions-progress')
+      const result = await response.json()
+      
+      progressTracking.updateStep('scraping', { 
+        id: 'scraping', 
+        label: `Reactions completed (${result.totalReactions || 0} found)`, 
+        status: 'completed' 
+      })
+      progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
+      progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
+      progressTracking.updateProgress(100)
+      progressTracking.completeProgress()
       
       // Clear selection after successful completion
       setSelectedPosts(new Set())
@@ -943,24 +981,28 @@ export default function PostsPage() {
             ...(requestBody.maxPosts ? { maxPosts: requestBody.maxPosts } : {})
           }
 
-          const response = await fetch('/api/scrape/profile-posts-progress', {
+          // Get auth token for Edge Functions
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) {
+            throw new Error('No authentication session found')
+          }
+
+          const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-profile-posts`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
             },
             body: JSON.stringify(individualRequestBody),
           })
 
-          const result = await response.json()
-
           if (response.ok) {
-            // Poll for this profile's completion
-            await pollProgress(result.progressId, '/api/scrape/profile-posts-progress')
+            const result = await response.json()
             successfulProfiles++
-            // Assume some posts were scraped (we could enhance this to get actual count)
-            // totalPostsScraped += 10 // Placeholder
+            console.log(`✅ Successfully scraped profile ${profileUrl}:`, result.message)
           } else {
-            console.error(`Failed to scrape profile ${profileUrl}:`, result.error)
+            const errorText = await response.text()
+            console.error(`Failed to scrape profile ${profileUrl}:`, errorText)
           }
         } catch (profileError) {
           console.error(`Error scraping profile ${profileUrl}:`, profileError)

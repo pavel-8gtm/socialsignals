@@ -933,57 +933,37 @@ export default function ProfilesPage() {
     try {
       const profileIds = Array.from(selectedProfiles)
       
-      const response = await fetch('/api/scrape/enrich-profiles-progress', {
+      // Get auth token for Edge Functions
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        throw new Error('No authentication session found')
+      }
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({ profileIds }),
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to start enrichment')
+        const errorText = await response.text()
+        throw new Error(errorText || 'Failed to start enrichment')
       }
 
-      if (!response.body) {
-        throw new Error('No response body')
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-
-      while (true) {
-        const { done, value } = await reader.read()
-        
-        if (done) break
-
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n')
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              
-              if (data.error) {
-                throw new Error(data.error)
-              }
-              
-              setEnrichmentProgress(data)
-              
-              if (data.completed) {
-                setSuccess(`Profile enrichment completed! Updated ${data.profilesProcessed} profiles.`)
-                // Reload profiles to show enriched data
-                setTimeout(() => {
-                  loadProfiles()
-                }, 1000)
-              }
-            } catch (parseError) {
-              console.error('Error parsing progress data:', parseError)
-            }
-          }
-        }
+      const result = await response.json()
+      
+      if (result.success) {
+        setSuccess(`Profile enrichment completed! Updated ${result.enrichedProfiles} profiles.`)
+        // Reload profiles to show enriched data
+        setTimeout(() => {
+          loadProfiles()
+        }, 1000)
+      } else {
+        throw new Error(result.error || 'Enrichment failed')
       }
     } catch (error) {
       console.error('Error enriching profiles:', error)
