@@ -121,14 +121,9 @@ export default function Navigation() {
                   </DropdownMenu>
               </>
             ) : (
-              <div className="flex items-center space-x-2">
-                <Button asChild variant="outline" size="sm">
-                  <Link href="/login">Sign in</Link>
-                </Button>
-                <Button asChild size="sm">
-                  <Link href="/signup">Sign up</Link>
-                </Button>
-              </div>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/login">Sign in</Link>
+              </Button>
             )}
           </div>
         </div>

@@ -16,20 +16,13 @@ export default function AuthCodeErrorPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-gray-600 text-center">
-            The confirmation link may have expired or already been used. Please try signing up again or contact support if the problem persists.
+            The confirmation link may have expired or already been used. Please try signing in with your existing account or contact support if the problem persists.
           </p>
-          <div className="flex gap-2">
-            <Button asChild variant="outline" className="flex-1">
-              <Link href="/signup">
-                Sign up again
-              </Link>
-            </Button>
-            <Button asChild className="flex-1">
-              <Link href="/login">
-                Sign in
-              </Link>
-            </Button>
-          </div>
+          <Button asChild className="w-full">
+            <Link href="/login">
+              Sign in
+            </Link>
+          </Button>
         </CardContent>
       </Card>
     </div>

@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import * as z from 'zod'
@@ -120,15 +119,6 @@ export default function LoginPage() {
               </Button>
             </form>
           </Form>
-          <div className="text-center text-sm">
-            <span className="text-gray-600">Don&apos;t have an account? </span>
-            <Link
-              href="/signup"
-              className="font-medium text-blue-600 hover:text-blue-500"
-            >
-              Sign up
-            </Link>
-          </div>
         </CardContent>
       </Card>
     </div>

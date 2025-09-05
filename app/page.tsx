@@ -15,11 +15,8 @@ export default function Home() {
           <p className="text-xl text-gray-600 mb-8">
             Scrape and analyze LinkedIn post engagement data to understand your audience better
           </p>
-          <div className="flex justify-center gap-4">
+          <div className="flex justify-center">
             <Button asChild size="lg">
-              <Link href="/signup">Get Started</Link>
-            </Button>
-            <Button asChild variant="outline" size="lg">
               <Link href="/login">Sign In</Link>
             </Button>
           </div>
