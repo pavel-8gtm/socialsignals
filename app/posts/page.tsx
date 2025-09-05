@@ -677,7 +677,7 @@ export default function PostsPage() {
       progressTracking.updateStep('scraping', { id: 'scraping', label: 'Fetching metadata...', status: 'running' })
 
       // Call Edge Function directly
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-metadata`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-post-metadata`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -758,7 +758,7 @@ export default function PostsPage() {
       progressTracking.updateStep('scraping', { id: 'scraping', label: 'Fetching metadata...', status: 'running' })
 
       // Call Edge Function directly
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-metadata`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-post-metadata`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
