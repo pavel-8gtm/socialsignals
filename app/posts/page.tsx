@@ -728,7 +728,7 @@ export default function PostsPage() {
             progressTracking.updateStep('enrichment', { 
               id: 'enrichment', 
               label: 'Enrichment failed (profiles saved without enrichment)', 
-              status: 'warning' 
+              status: 'error' 
             })
             enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
           }
@@ -737,7 +737,7 @@ export default function PostsPage() {
           progressTracking.updateStep('enrichment', { 
             id: 'enrichment', 
             label: 'Enrichment failed (profiles saved without enrichment)', 
-            status: 'warning' 
+            status: 'error' 
           })
           enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
         }
@@ -797,7 +797,7 @@ export default function PostsPage() {
         // Deduplicate profiles for reactions - show unique people only
         const uniqueProfiles = new Map()
         data?.forEach(item => {
-          const profileId = (item.profiles as Record<string, unknown>)?.id as string
+          const profileId = (item.profiles as unknown as Record<string, unknown>)?.id as string
           if (profileId && !uniqueProfiles.has(profileId)) {
             uniqueProfiles.set(profileId, item)
           }
@@ -829,7 +829,7 @@ export default function PostsPage() {
         // Deduplicate profiles for comments - show unique people only
         const uniqueProfiles = new Map()
         data?.forEach(item => {
-          const profileId = (item.profiles as Record<string, unknown>)?.id as string
+          const profileId = (item.profiles as unknown as Record<string, unknown>)?.id as string
           if (profileId && !uniqueProfiles.has(profileId)) {
             uniqueProfiles.set(profileId, item)
           }
@@ -1136,7 +1136,7 @@ export default function PostsPage() {
             progressTracking.updateStep('enrichment', { 
               id: 'enrichment', 
               label: 'Enrichment failed (profiles saved without enrichment)', 
-              status: 'warning' 
+              status: 'error' 
             })
             enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
           }
@@ -1145,7 +1145,7 @@ export default function PostsPage() {
           progressTracking.updateStep('enrichment', { 
             id: 'enrichment', 
             label: 'Enrichment failed (profiles saved without enrichment)', 
-            status: 'warning' 
+            status: 'error' 
           })
           enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
         }

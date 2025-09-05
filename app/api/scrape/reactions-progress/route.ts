@@ -1049,7 +1049,7 @@ async function processReactionsScraping(
     let enrichmentResult = { enrichedCount: 0, skipped: true }
     try {
       console.log(`🎯 Starting auto-enrichment for ${allNewlyUpsertedProfileIds.length} newly discovered profiles`)
-      enrichmentResult = await autoEnrichProfiles(supabase, user.id, progressId, allNewlyUpsertedProfileIds)
+      enrichmentResult = await autoEnrichProfiles(supabase, user.id, progressId, allNewlyUpsertedProfileIds, allNewlyUpsertedProfileIds)
     } catch (enrichError) {
       console.warn('Auto-enrichment failed:', enrichError)
       // Update progress to show enrichment failed but don't fail the whole operation
