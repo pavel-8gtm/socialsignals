@@ -101,7 +101,7 @@ export default function SettingsPage() {
         form.setValue('apify_api_key', data.apify_api_key)
         form.setValue('monitored_profiles', (data.monitored_profiles || []).join('\n'))
       }
-    } catch (error) {
+    } catch {
       setError('Failed to load settings')
     } finally {
       setIsLoading(false)
@@ -144,7 +144,7 @@ export default function SettingsPage() {
         setSuccess('Settings saved successfully!')
         loadSettings() // Reload to get updated data
       }
-    } catch (error) {
+    } catch {
       setError('Failed to save settings')
     } finally {
       setIsSaving(false)
@@ -189,7 +189,7 @@ export default function SettingsPage() {
       } else {
         setError(result.error || 'Failed to create webhook')
       }
-    } catch (error) {
+    } catch {
       setError('Failed to create webhook')
     } finally {
       setIsWebhookLoading(false)
@@ -221,7 +221,7 @@ export default function SettingsPage() {
       } else {
         setError(result.error || 'Failed to update webhook')
       }
-    } catch (error) {
+    } catch {
       setError('Failed to update webhook')
     } finally {
       setIsWebhookLoading(false)
@@ -250,7 +250,7 @@ export default function SettingsPage() {
       } else {
         setError(result.error || 'Failed to delete webhook')
       }
-    } catch (error) {
+    } catch {
       setError('Failed to delete webhook')
     } finally {
       setIsWebhookLoading(false)

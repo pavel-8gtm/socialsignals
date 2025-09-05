@@ -2093,7 +2093,7 @@ export default function ProfilesPage() {
                 </div>
               ) : (
                 <div className="space-y-4 p-4">
-                  {timelineDialog.timeline.map((item, index) => (
+                  {timelineDialog.timeline.map((item) => (
                     <div key={item.post_id} className="border rounded-lg p-4 bg-white shadow-sm">
                       {/* Post Header */}
                       <div className="flex items-center justify-between mb-3">
