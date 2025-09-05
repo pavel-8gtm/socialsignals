@@ -32,7 +32,7 @@ export function ProgressOverlay({
   onClose,
   title,
   steps,
-  currentStep,
+  // currentStep,
   overallProgress,
   canCancel = false,
   onCancel,

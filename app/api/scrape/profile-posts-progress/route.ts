@@ -1,20 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { ApifyService, type ApifyProfilePostData } from '@/lib/services/apify'
+import { ApifyService } from '@/lib/services/apify'
 import type { Database } from '@/lib/types/database.types'
 
 type Post = Database['public']['Tables']['posts']['Insert']
 
-// Store progress data in memory (for demo purposes - in production, consider Redis)
-const progressStore = new Map<string, {
+interface ProgressData {
   status: 'starting' | 'scraping' | 'processing' | 'saving' | 'completed' | 'error'
   progress: number
   currentStep: string
   totalPosts?: number
   processedPosts?: number
   error?: string
-  result?: any
-}>()
+  result?: Record<string, unknown>
+}
+
+interface UserData {
+  id: string
+}
+
+// Store progress data in memory (for demo purposes - in production, consider Redis)
+const progressStore = new Map<string, ProgressData>()
 
 export async function POST(request: NextRequest) {
   const progressId = Math.random().toString(36).substring(7)
@@ -55,7 +61,7 @@ export async function POST(request: NextRequest) {
     })
 
     // Start the scraping process asynchronously
-    processProfileScraping(progressId, profileUrl, scrapeUntilDate, maxPosts, user, userSettings.apify_api_key)
+    processProfileScraping(progressId, profileUrl, user, userSettings.apify_api_key, scrapeUntilDate, maxPosts)
 
     return NextResponse.json({ progressId })
 
@@ -97,10 +103,10 @@ export async function GET(request: NextRequest) {
 async function processProfileScraping(
   progressId: string,
   profileUrl: string,
+  user: UserData,
+  apifyApiKey: string,
   scrapeUntilDate?: string,
-  maxPosts?: string,
-  user: any,
-  apifyApiKey: string
+  maxPosts?: string
 ) {
   const supabase = await createClient()
   
@@ -128,7 +134,7 @@ async function processProfileScraping(
     const profilePosts = await apifyService.scrapeProfilePosts({
       profileUrl,
       scrapeUntilDate,
-      maxPosts
+      maxPosts: maxPosts ? parseInt(maxPosts, 10) : undefined
     })
 
     console.log(`Scraped ${profilePosts.length} posts from profile`)

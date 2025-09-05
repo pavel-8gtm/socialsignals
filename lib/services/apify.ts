@@ -200,8 +200,8 @@ export interface ApifyProfilePostData {
   timeSincePosted: string
   shareUrn: string
   text: string
-  comments: any[]
-  reactions: any[]
+  comments: Array<Record<string, unknown>>
+  reactions: Array<Record<string, unknown>>
   numShares: number
   numLikes: number
   numComments: number
@@ -424,8 +424,8 @@ export class ApifyService {
       
       console.log(`🐛 DEBUG: Step 1 - Processing ${batches.length} batches of up to ${batchSize} posts each`)
       
-      let allBulkComments: ApifyCommentData[] = []
-      let allBulkResponses: any[] = []
+      const allBulkComments: ApifyCommentData[] = []
+      const allBulkResponses: Array<Record<string, unknown>> = []
       
       // Process all batches concurrently (up to 32 concurrent Apify runs)
       console.log(`🐛 DEBUG: Starting ${batches.length} concurrent batch calls`)
@@ -469,7 +469,7 @@ export class ApifyService {
       batchResults.forEach((result, index) => {
         if (result.status === 'fulfilled' && result.value) {
           allBulkComments.push(...result.value.comments)
-          allBulkResponses.push(...result.value.responses)
+          allBulkResponses.push(...(result.value.responses as Array<Record<string, unknown>>))
         } else {
           console.error(`🐛 DEBUG: Batch ${index + 1} failed:`, result.status === 'rejected' ? result.reason : 'Unknown error')
         }
@@ -484,8 +484,8 @@ export class ApifyService {
       // Check totalComments from all batch responses to find posts needing pagination
       allBulkResponses.forEach(item => {
         if (item && typeof item === 'object' && 'totalComments' in item && 'post_input' in item) {
-          const totalComments = (item as any).totalComments
-          const postUrl = (item as any).post_input
+          const totalComments = (item as Record<string, unknown>).totalComments as number
+          const postUrl = (item as Record<string, unknown>).post_input as string
           
           if (totalComments > 100) {
             postsNeedingPagination.push(postUrl)
@@ -593,7 +593,7 @@ export class ApifyService {
    * Scrape posts from a LinkedIn profile
    */
   async scrapeProfilePosts(params: ScrapeProfilePostsParams): Promise<ApifyProfilePostData[]> {
-    const input: any = {
+    const input: Record<string, unknown> = {
       deepScrape: false,
       rawData: false,
       urls: [params.profileUrl]
@@ -633,6 +633,9 @@ export class ApifyService {
   async getRunStatus(runId: string) {
     try {
       const run = await this.client.run(runId).get()
+      if (!run) {
+        throw new Error('Run not found')
+      }
       return {
         id: run.id,
         status: run.status,
@@ -666,7 +669,7 @@ export class ApifyService {
       await this.client.run(run.id).waitForFinish()
       const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
 
-      return items as ApifyProfileEnrichmentData[]
+      return (items as unknown) as ApifyProfileEnrichmentData[]
     } catch (error) {
       console.error('Error enriching profiles:', error)
       throw error

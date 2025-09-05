@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import ApifyService, { ApifyProfileEnrichmentData } from '@/lib/services/apify'
+import type { Database } from '@/lib/types/database.types'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -63,7 +65,7 @@ export async function POST(request: NextRequest) {
 async function processEnrichment(
   controller: ReadableStreamDefaultController,
   encoder: TextEncoder,
-  supabase: any,
+  supabase: SupabaseClient<Database>,
   userId: string,
   apiKey: string,
   profileIds: string[]
@@ -343,7 +345,7 @@ async function processEnrichment(
     // Filter out error responses and only process successful enrichments
     const validEnrichedProfiles = enrichedProfiles.filter(profile => 
       profile.basic_info && 
-      !profile.message?.includes('No profile found')
+      !((profile as unknown) as Record<string, unknown>).message?.toString().includes('No profile found')
     )
 
     console.log(`🐛 DEBUG: ${enrichedProfiles.length} total responses, ${validEnrichedProfiles.length} valid profiles`)
@@ -498,7 +500,7 @@ async function processEnrichment(
 }
 
 async function handleProfileUnification(
-  supabase: any,
+  supabase: SupabaseClient<Database>,
   userId: string,
   enrichedProfiles: ApifyProfileEnrichmentData[],
   controller: ReadableStreamDefaultController,
@@ -591,7 +593,9 @@ async function handleProfileUnification(
             if (aEnriched !== bEnriched) return bEnriched ? 1 : -1
             
             // Then prefer older profiles
-            return new Date(a.first_seen).getTime() - new Date(b.first_seen).getTime()
+            const aDate = a.first_seen ? new Date(a.first_seen).getTime() : 0
+            const bDate = b.first_seen ? new Date(b.first_seen).getTime() : 0
+            return aDate - bDate
           })
           
           const keeperId = profileGroup[0].id

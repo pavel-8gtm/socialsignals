@@ -1,6 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
+interface EngagementData {
+  post: {
+    id: string
+    post_id?: string
+    posted_at_iso?: string
+    post_url?: string
+  }
+  reaction_type?: string
+  posted_at_date?: string
+}
+
+interface ProfileStats {
+  total_reactions: number
+  total_comments: number
+  posts_engaged_with: number
+  latest_post_date: string | null
+  latest_post_url: string | null
+  latest_engagement_type: string
+}
+
+interface EngagedPost {
+  post_id?: string
+  post_url?: string
+  posted_at_iso?: string
+  engagement_types: string[]
+}
+
 interface WebhookPushRequest {
   webhookId: string;
   profileIds: string[];
@@ -117,10 +144,10 @@ export async function POST(request: NextRequest) {
     console.log('Webhook comments data:', commentsData?.length, 'comments found');
 
     // Process engagement data to compute latest engagement type for each profile
-    const reactionsByProfile = new Map<string, any[]>();
+    const reactionsByProfile = new Map<string, EngagementData[]>();
     reactionsData?.forEach(post => {
       post.reactions?.forEach(reaction => {
-        const profileId = reaction.profiles?.id;
+        const profileId = ((reaction.profiles as unknown) as Record<string, unknown>)?.id as string;
         if (!profileId) return;
         
         if (!reactionsByProfile.has(profileId)) {
@@ -138,10 +165,10 @@ export async function POST(request: NextRequest) {
       });
     });
     
-    const commentsByProfile = new Map<string, any[]>();
+    const commentsByProfile = new Map<string, EngagementData[]>();
     commentsData?.forEach(post => {
       post.comments?.forEach(comment => {
-        const profileId = comment.profiles?.id;
+        const profileId = ((comment.profiles as unknown) as Record<string, unknown>)?.id as string;
         if (!profileId) return;
         
         if (!commentsByProfile.has(profileId)) {
@@ -161,7 +188,7 @@ export async function POST(request: NextRequest) {
 
     // Compute all missing fields for each profile (same logic as frontend)
     const profileEngagementTypes = new Map<string, string>();
-    const profileStats = new Map<string, any>();
+    const profileStats = new Map<string, ProfileStats>();
     
     profiles.forEach(profile => {
       let latestEngagementType = '';
@@ -171,7 +198,7 @@ export async function POST(request: NextRequest) {
       const profileComments = commentsByProfile.get(profile.id) || [];
       
       // Combine all posts and find the most recent one
-      const allEngagedPosts = new Map<string, any>();
+      const allEngagedPosts = new Map<string, EngagedPost>();
       
       profileReactions.forEach(reaction => {
         const postId = reaction.post.id; // Use post.id not post.post_id
@@ -206,11 +233,11 @@ export async function POST(request: NextRequest) {
       const postsEngagedWith = uniquePosts.length;
       
       // Find the most recent post
-      const latestPost = uniquePosts.reduce((latest, post) => {
+      const latestPost = uniquePosts.reduce((latest: EngagedPost | null, post: EngagedPost) => {
         const postDate = post.posted_at_iso ? new Date(post.posted_at_iso) : new Date(0);
         const latestDate = latest ? new Date(latest.posted_at_iso || 0) : new Date(0);
         return postDate > latestDate ? post : latest;
-      }, null as any);
+      }, null as EngagedPost | null);
       
       // Get latest post info
       const latestPostDate = latestPost?.posted_at_iso || null;
@@ -231,7 +258,8 @@ export async function POST(request: NextRequest) {
         total_comments: totalComments,
         posts_engaged_with: postsEngagedWith,
         latest_post_date: latestPostDate,
-        latest_post_url: latestPostUrl
+        latest_post_url: latestPostUrl,
+        latest_engagement_type: latestEngagementType
       });
     });
 

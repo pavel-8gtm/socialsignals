@@ -7,7 +7,7 @@ import * as z from 'zod'
 import { createClient } from '@/lib/supabase/client'
 import { validateLinkedInPosts, type LinkedInPostData } from '@/lib/utils/linkedin'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -49,7 +49,7 @@ export default function PostsPage() {
   const [success, setSuccess] = useState<string | null>(null)
   const [validationResults, setValidationResults] = useState<LinkedInPostData[]>([])
   const [posts, setPosts] = useState<Post[]>([])
-  const [user, setUser] = useState<any>(null)
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showProfileDialog, setShowProfileDialog] = useState(false)
@@ -159,7 +159,7 @@ export default function PostsPage() {
   const [previewPost, setPreviewPost] = useState<Post | null>(null)
   const [showPreviewDialog, setShowPreviewDialog] = useState(false)
   const [showEngagementDialog, setShowEngagementDialog] = useState(false)
-  const [engagementData, setEngagementData] = useState<{ post: Post; type: 'reactions' | 'comments'; profiles: any[] } | null>(null)
+  const [engagementData, setEngagementData] = useState<{ post: Post; type: 'reactions' | 'comments'; profiles: Array<Record<string, unknown>> } | null>(null)
   const [loadingEngagement, setLoadingEngagement] = useState(false)
   const [sortBy, setSortBy] = useState<'posted_at' | 'author_name' | 'scraped_at' | 'created_at' | 'metadata_last_updated_at' | null>('posted_at')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
@@ -245,7 +245,7 @@ export default function PostsPage() {
         
         // Detect newly added posts
         if (detectNewPosts) {
-          const newPostIds = new Set()
+          const newPostIds = new Set<string>()
           postsWithCounts.forEach(post => {
             if (!previousPostIds.has(post.id)) {
               newPostIds.add(post.id)
@@ -265,7 +265,7 @@ export default function PostsPage() {
         setPosts(postsWithCounts)
         return newPostsCount
       }
-    } catch (error) {
+    } catch {
       setError('Failed to load posts')
       return 0
     } finally {
@@ -287,7 +287,7 @@ export default function PostsPage() {
         setSelectedPosts(new Set())
         await loadPosts()
       }
-    } catch (error) {
+    } catch {
       setError('Failed to delete posts')
     }
   }
@@ -502,8 +502,8 @@ export default function PostsPage() {
       await clearEngagementFlagsForPosts(postIds)
 
       // Determine success/failure
-      const reactionsSuccess = results.find(r => r && 'totalReactions' in r)?.status === 'completed'
-      const commentsSuccess = results.find(r => r && 'totalComments' in r)?.status === 'completed'
+      const reactionsSuccess = (results.find(r => r && typeof r === 'object' && 'totalReactions' in r && 'status' in r) as { status: string } | undefined)?.status === 'completed'
+      const commentsSuccess = (results.find(r => r && typeof r === 'object' && 'totalComments' in r && 'status' in r) as { status: string } | undefined)?.status === 'completed'
 
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
       progressTracking.updateProgress(100)
@@ -511,8 +511,8 @@ export default function PostsPage() {
 
       // Set appropriate success/error message
       if (reactionsSuccess && commentsSuccess) {
-        const reactionsData = results.find(r => r && 'totalReactions' in r)
-        const commentsData = results.find(r => r && 'totalComments' in r)
+        const reactionsData = results.find(r => r && typeof r === 'object' && 'totalReactions' in r) as { totalReactions?: number } | undefined
+        const commentsData = results.find(r => r && typeof r === 'object' && 'totalComments' in r) as { totalComments?: number } | undefined
         setSuccess(`Successfully scraped both reactions (${reactionsData?.totalReactions || 0}) and comments (${commentsData?.totalComments || 0}) for ${selectedPosts.size} posts`)
       } else if (reactionsSuccess || commentsSuccess) {
         const scraped = reactionsSuccess ? 'reactions' : 'comments'
@@ -901,7 +901,7 @@ export default function PostsPage() {
         return
       }
 
-      const requestBody: any = {
+      const requestBody: Record<string, unknown> = {
         profileUrls: profilesToScrape  // Changed from single profileUrl to multiple profileUrls
       }
 
@@ -929,7 +929,7 @@ export default function PostsPage() {
       progressTracking.startProgress(`Scraping Posts from LinkedIn ${profileText}`, initialSteps)
 
       // Process profiles sequentially
-      let totalPostsScraped = 0
+      // let totalPostsScraped = 0
       let successfulProfiles = 0
       
       for (let i = 0; i < profilesToScrape.length; i++) {
@@ -944,10 +944,10 @@ export default function PostsPage() {
         })
         
         try {
-          const individualRequestBody = {
+          const individualRequestBody: Record<string, unknown> = {
             profileUrl,
-            ...(requestBody.scrapeUntilDate && { scrapeUntilDate: requestBody.scrapeUntilDate }),
-            ...(requestBody.maxPosts && { maxPosts: requestBody.maxPosts })
+            ...(requestBody.scrapeUntilDate ? { scrapeUntilDate: requestBody.scrapeUntilDate } : {}),
+            ...(requestBody.maxPosts ? { maxPosts: requestBody.maxPosts } : {})
           }
 
           const response = await fetch('/api/scrape/profile-posts-progress', {
@@ -965,7 +965,7 @@ export default function PostsPage() {
             await pollProgress(result.progressId, '/api/scrape/profile-posts-progress')
             successfulProfiles++
             // Assume some posts were scraped (we could enhance this to get actual count)
-            totalPostsScraped += 10 // Placeholder
+            // totalPostsScraped += 10 // Placeholder
           } else {
             console.error(`Failed to scrape profile ${profileUrl}:`, result.error)
           }
@@ -1048,7 +1048,7 @@ export default function PostsPage() {
     if (!sortBy) return filtered
 
     const sorted = [...filtered].sort((a, b) => {
-      let valueA: any, valueB: any
+      let valueA: unknown, valueB: unknown
 
       switch (sortBy) {
         case 'posted_at':
@@ -1075,8 +1075,10 @@ export default function PostsPage() {
           return 0
       }
 
-      if (valueA < valueB) return sortOrder === 'asc' ? -1 : 1
-      if (valueA > valueB) return sortOrder === 'asc' ? 1 : -1
+      const numA = Number(valueA)
+      const numB = Number(valueB)
+      if (numA < numB) return sortOrder === 'asc' ? -1 : 1
+      if (numA > numB) return sortOrder === 'asc' ? 1 : -1
       return 0
     })
 
@@ -1264,7 +1266,7 @@ export default function PostsPage() {
                                   toDate={new Date()} // Don't show dates beyond today
                                   fromDate={new Date("1900-01-01")} // Don't show dates before 1900
                                   showOutsideDays={false} // Hide days from other months
-                                  captionLayout="dropdown-buttons" // Compact month/year selection
+                                  captionLayout="dropdown" // Compact month/year selection
                                   className="p-2"
                                   initialFocus
                                 />
@@ -1566,7 +1568,7 @@ export default function PostsPage() {
             ) : posts.length === 0 ? (
               <div className="text-center py-12 text-gray-500">
                 <p className="text-lg mb-2">No posts added yet</p>
-                <p className="text-sm">Click "Add Manually" to get started with LinkedIn engagement analysis</p>
+                <p className="text-sm">Click &quot;Add Manually&quot; to get started with LinkedIn engagement analysis</p>
               </div>
             ) : (
               <>
@@ -1845,7 +1847,7 @@ export default function PostsPage() {
                           const lastCommentScrape = post.last_comments_scrape ? new Date(post.last_comments_scrape) : null
                           
                           // Find the most recent scrape date
-                          const dates = [lastReactionScrape, lastCommentScrape].filter(Boolean)
+                          const dates = [lastReactionScrape, lastCommentScrape].filter((d): d is Date => d !== null)
                           if (dates.length === 0) return 'Never'
                           
                           const mostRecent = new Date(Math.max(...dates.map(d => d.getTime())))
@@ -2093,34 +2095,34 @@ export default function PostsPage() {
                 </div>
               ) : (
                 <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                  {engagementData?.profiles.map((profile: any, index: number) => (
-                    <div key={profile.profiles.id || index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                  {engagementData?.profiles.map((profile: Record<string, unknown>, index: number) => (
+                    <div key={(profile.profiles as Record<string, unknown>)?.id as string || index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
                       <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
-                        {profile.profiles.name?.charAt(0)?.toUpperCase() || '?'}
+                        {((profile.profiles as Record<string, unknown>)?.name as string)?.charAt(0)?.toUpperCase() || '?'}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          {profile.profiles.profile_url ? (
+                          {((profile.profiles as Record<string, unknown>)?.profile_url as string) ? (
                             <a
-                              href={profile.profiles.profile_url}
+                              href={(profile.profiles as Record<string, unknown>)?.profile_url as string}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="font-medium text-blue-600 hover:text-blue-800 hover:underline text-sm truncate"
                             >
-                              {profile.profiles.name || 'Unknown'}
+                              {((profile.profiles as Record<string, unknown>)?.name as string) || 'Unknown'}
                             </a>
                           ) : (
-                            <span className="font-medium text-sm truncate">{profile.profiles.name || 'Unknown'}</span>
+                            <span className="font-medium text-sm truncate">{((profile.profiles as Record<string, unknown>)?.name as string) || 'Unknown'}</span>
                           )}
-                          {engagementData.type === 'reactions' && profile.reaction_type && (
+                          {engagementData.type === 'reactions' && (profile.reaction_type as string) && (
                             <Badge variant="outline" className="text-xs flex-shrink-0">
-                              {profile.reaction_type}
+                              {profile.reaction_type as string}
                             </Badge>
                           )}
                         </div>
-                        {profile.profiles.headline && (
+                        {((profile.profiles as Record<string, unknown>)?.headline as string) && (
                           <div className="text-xs text-gray-500 line-clamp-1">
-                            {profile.profiles.headline}
+                            {(profile.profiles as Record<string, unknown>)?.headline as string}
                           </div>
                         )}
                       </div>

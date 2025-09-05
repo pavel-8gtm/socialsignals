@@ -47,7 +47,7 @@ export default function LoginPage() {
         router.push('/')
         router.refresh()
       }
-    } catch (error) {
+    } catch {
       setError('An unexpected error occurred')
     } finally {
       setIsLoading(false)
@@ -121,7 +121,7 @@ export default function LoginPage() {
             </form>
           </Form>
           <div className="text-center text-sm">
-            <span className="text-gray-600">Don't have an account? </span>
+            <span className="text-gray-600">Don&apos;t have an account? </span>
             <Link
               href="/signup"
               className="font-medium text-blue-600 hover:text-blue-500"

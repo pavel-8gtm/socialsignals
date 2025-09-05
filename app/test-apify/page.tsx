@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 export default function TestApifyPage() {
   const [postUrl, setPostUrl] = useState('https://www.linkedin.com/posts/yurevichcv_how-the-market-sees-it-lower-funnel-activity-7321446486167244800-y6vl')
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<any>(null)
+  const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   async function testApify() {
@@ -79,13 +79,13 @@ export default function TestApifyPage() {
               <Alert>
                 <AlertDescription>
                   <div className="space-y-2">
-                    <p className="font-medium text-green-600">✅ {result.message}</p>
-                    <p>Reactions found: {result.reactionsFound}</p>
-                    {result.sampleReactions && result.sampleReactions.length > 0 && (
+                    <p className="font-medium text-green-600">✅ {(result as Record<string, unknown>).message as string}</p>
+                    <p>Reactions found: {(result as Record<string, unknown>).reactionsFound as number}</p>
+                    {((result as Record<string, unknown>).sampleReactions as Array<unknown>) && ((result as Record<string, unknown>).sampleReactions as Array<unknown>).length > 0 && (
                       <div className="mt-4">
                         <p className="font-medium">Sample reactions:</p>
                         <pre className="text-xs bg-gray-100 p-2 rounded mt-2 overflow-x-auto">
-                          {JSON.stringify(result.sampleReactions, null, 2)}
+                          {JSON.stringify((result as Record<string, unknown>).sampleReactions, null, 2)}
                         </pre>
                       </div>
                     )}

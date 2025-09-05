@@ -75,7 +75,7 @@ export default function SettingsPage() {
   useEffect(() => {
     loadSettings()
     loadWebhooks()
-  }, [])
+  }, [loadSettings])
 
   async function loadSettings() {
     setIsLoading(true)
@@ -375,7 +375,7 @@ export default function SettingsPage() {
                 <div className="text-sm text-gray-600">
                   <p>✅ API key configured</p>
                   <p className="text-xs text-gray-500 mt-1">
-                    Last updated: {new Date(settings.updated_at).toLocaleString()}
+                    Last updated: {settings.updated_at ? new Date(settings.updated_at).toLocaleString() : 'Never'}
                   </p>
                 </div>
               </div>
@@ -387,7 +387,7 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle>Monitored LinkedIn Profiles</CardTitle>
             <CardDescription>
-              Add LinkedIn profile URLs that you want to monitor regularly. These profiles will be pre-selected when you use "Scrape from Profile".
+              Add LinkedIn profile URLs that you want to monitor regularly. These profiles will be pre-selected when you use &quot;Scrape from Profile&quot;.
               Enter one profile URL per line.
             </CardDescription>
           </CardHeader>

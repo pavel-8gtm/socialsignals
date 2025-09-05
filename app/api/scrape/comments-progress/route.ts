@@ -2,12 +2,53 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { ApifyService, type ApifyCommentData } from '@/lib/services/apify'
 import type { Database } from '@/lib/types/database.types'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
-type Profile = Database['public']['Tables']['profiles']['Insert']
 type Comment = Database['public']['Tables']['comments']['Insert']
 
+interface CommentAuthor {
+  name: string
+  headline?: string
+  profile_url: string
+  profile_picture?: string
+}
+
+interface ProfileWithId {
+  id: string
+  urn: string
+}
+
+interface UpsertResult {
+  profiles: ProfileWithId[]
+  newlyUpsertedIds: string[]
+}
+
+interface EnrichmentResult {
+  enrichedCount: number
+  skipped: boolean
+  error?: string
+}
+
+interface ProgressData {
+  status: 'starting' | 'scraping' | 'processing' | 'saving' | 'completed' | 'error'
+  progress: number
+  currentStep: string
+  totalPosts?: number
+  processedPosts?: number
+  totalComments?: number
+  processedComments?: number
+  totalItems?: number
+  processedItems?: number
+  error?: string
+  result?: Record<string, unknown>
+}
+
+interface UserData {
+  id: string
+}
+
 // Helper function to extract identifiers from LinkedIn profile data (for comments)
-function extractProfileIdentifiersFromComment(author: any) {
+function extractProfileIdentifiersFromComment(author: CommentAuthor) {
   let primary_identifier = null
   let secondary_identifier = null
   
@@ -31,7 +72,7 @@ function extractProfileIdentifiersFromComment(author: any) {
 }
 
 // Sophisticated profile upsert function for comments using dual identifier system
-async function upsertCommentProfilesWithDualIdentifiers(supabase: any, profiles: any[]) {
+async function upsertCommentProfilesWithDualIdentifiers(supabase: SupabaseClient<Database>, profiles: CommentAuthor[]): Promise<UpsertResult> {
   const results = []
   const newlyUpsertedIds = []
   
@@ -145,7 +186,7 @@ async function upsertCommentProfilesWithDualIdentifiers(supabase: any, profiles:
       }
       
       // Update existing profile with new data but preserve original URN
-      const updateData = {
+      const updateData: Partial<Database['public']['Tables']['profiles']['Update']> = {
         urn: preservedUrn, // Preserve original URN
         name: author.name,
         headline: author.headline,
@@ -242,7 +283,7 @@ async function upsertCommentProfilesWithDualIdentifiers(supabase: any, profiles:
 }
 
 // Auto-enrichment function for newly discovered profiles
-async function autoEnrichProfiles(supabase: any, userId: string, progressId: string, newlyUpsertedProfileIds: string[]) {
+async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: string, progressId: string, newlyUpsertedProfileIds: string[]): Promise<EnrichmentResult> {
   console.log(`🔍 Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`)
   
   // Update progress to show we're checking for enrichment
@@ -333,7 +374,7 @@ async function autoEnrichProfiles(supabase: any, userId: string, progressId: str
     const profileIdentifiers = profilesToEnrich.map(profile => {
       const match = profile.profile_url?.match(/\/in\/([^\/\?]+)/)
       return match ? match[1] : profile.profile_url
-    }).filter(Boolean)
+    }).filter((id): id is string => Boolean(id))
     
     if (profileIdentifiers.length === 0) {
       console.warn('No valid profile identifiers found for enrichment')
@@ -386,7 +427,7 @@ async function autoEnrichProfiles(supabase: any, userId: string, progressId: str
     
     // Process and save enriched data (similar to enrich-profiles-progress route)
     const validEnrichedProfiles = enrichedData.filter(profile => 
-      profile.basic_info && !profile.basic_info.error_message?.includes('No profile found')
+      profile.basic_info && !(profile.basic_info as Record<string, unknown>).error_message?.toString().includes('No profile found')
     )
     
     let updatedCount = 0
@@ -502,17 +543,7 @@ async function autoEnrichProfiles(supabase: any, userId: string, progressId: str
 }
 
 // Store progress data in memory
-const progressStore = new Map<string, {
-  status: 'starting' | 'scraping' | 'processing' | 'saving' | 'completed' | 'error'
-  progress: number
-  currentStep: string
-  totalPosts?: number
-  processedPosts?: number
-  totalComments?: number
-  processedComments?: number
-  error?: string
-  result?: any
-}>()
+const progressStore = new Map<string, ProgressData>()
 
 export async function POST(request: NextRequest) {
   const progressId = Math.random().toString(36).substring(7)
@@ -608,14 +639,21 @@ export async function GET(request: NextRequest) {
 
 async function processCommentsScraping(
   progressId: string,
-  posts: any[],
-  user: any,
+  posts: Database['public']['Tables']['posts']['Row'][],
+  user: UserData,
   apifyApiKey: string
 ) {
   const supabase = await createClient()
   
   try {
-    const results: any[] = []
+    const results: Array<{
+      postId: string
+      postUrl: string
+      commentsCount: number
+      profilesCount: number
+      status?: string
+      error?: string
+    }> = []
     const errors: string[] = []
     const allNewlyUpsertedProfileIds: string[] = [] // Track all profiles that need enrichment
     
@@ -720,7 +758,7 @@ async function processCommentsScraping(
             })
           } else {
             // Process profiles first (same approach as regular API)
-            const uniqueProfiles = new Map<string, any>()
+            const uniqueProfiles = new Map<string, CommentAuthor>()
             
             validComments.forEach(comment => {
               // Use profile_url as the unique identifier since we don't have URN (same as regular API)
@@ -731,8 +769,8 @@ async function processCommentsScraping(
 
             // Process profiles with sophisticated deduplication (same as reactions)
             const profilesToUpsert = Array.from(uniqueProfiles.values())
-            let profilesWithIds = []
-            let newlyUpsertedProfileIds = []
+            let profilesWithIds: ProfileWithId[] = []
+            const newlyUpsertedProfileIds: string[] = []
 
             if (profilesToUpsert.length > 0) {
               try {
@@ -756,7 +794,7 @@ async function processCommentsScraping(
               // match by profile_url directly since we know the order
               const uniqueProfilesArray = Array.from(uniqueProfiles.values())
               
-              profilesWithIds?.forEach((profile: { urn: string; id: string }, index: number) => {
+              profilesWithIds?.forEach((profile: ProfileWithId, index: number) => {
                 // Match by index since upsertCommentProfilesWithDualIdentifiers processes in the same order
                 if (index < uniqueProfilesArray.length) {
                   const originalProfile = uniqueProfilesArray[index]

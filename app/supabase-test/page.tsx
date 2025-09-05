@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 
 export default function SupabaseTest() {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
-  const [user, setUser] = useState<any>(null)
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
 
   useEffect(() => {
     const supabase = createClient()

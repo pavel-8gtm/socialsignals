@@ -2,12 +2,54 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { ApifyService, type ApifyReactionData } from '@/lib/services/apify'
 import type { Database } from '@/lib/types/database.types'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
-type Profile = Database['public']['Tables']['profiles']['Insert']
 type Reaction = Database['public']['Tables']['reactions']['Insert']
 
+interface ReactorProfile {
+  urn: string
+  name: string
+  headline?: string
+  profile_url: string
+  profile_pictures?: Record<string, unknown>
+}
+
+interface ProfileWithId {
+  id: string
+  urn: string
+}
+
+interface UpsertResult {
+  profiles: ProfileWithId[]
+  newlyUpsertedIds: string[]
+}
+
+interface EnrichmentResult {
+  enrichedCount: number
+  skipped: boolean
+  error?: string
+}
+
+interface ProgressData {
+  status: 'starting' | 'scraping' | 'processing' | 'saving' | 'completed' | 'error'
+  progress: number
+  currentStep: string
+  totalPosts?: number
+  processedPosts?: number
+  totalReactions?: number
+  processedReactions?: number
+  totalItems?: number
+  processedItems?: number
+  error?: string
+  result?: Record<string, unknown>
+}
+
+interface UserData {
+  id: string
+}
+
 // Helper function to extract identifiers from LinkedIn profile data
-function extractProfileIdentifiers(reactor: any) {
+function extractProfileIdentifiers(reactor: ReactorProfile) {
   let primary_identifier = null
   let secondary_identifier = null
   
@@ -38,19 +80,19 @@ function extractProfileIdentifiers(reactor: any) {
 }
 
 // Sophisticated profile upsert function using dual identifier system
-async function upsertProfilesWithDualIdentifiers(supabase: any, profiles: any[]) {
+async function upsertProfilesWithDualIdentifiers(supabase: SupabaseClient<Database>, profiles: ReactorProfile[]): Promise<UpsertResult> {
   const results = []
   const newlyUpsertedIds = []
   
   for (const reactor of profiles) {
     const { primary_identifier, secondary_identifier } = extractProfileIdentifiers(reactor)
     
-    const profileData = {
+    const profileData: Database['public']['Tables']['profiles']['Insert'] = {
       urn: reactor.urn,
       name: reactor.name,
       headline: reactor.headline,
       profile_url: reactor.profile_url,
-      profile_pictures: reactor.profile_pictures,
+      profile_pictures: reactor.profile_pictures as Database['public']['Tables']['profiles']['Insert']['profile_pictures'],
       primary_identifier,
       secondary_identifier
     }
@@ -140,12 +182,12 @@ async function upsertProfilesWithDualIdentifiers(supabase: any, profiles: any[])
       }
       
       // Update existing profile with new data but preserve original URN
-      const updateData = {
+      const updateData: Partial<Database['public']['Tables']['profiles']['Update']> = {
         urn: preservedUrn, // Preserve original URN
         name: reactor.name,
         headline: reactor.headline,
         profile_url: reactor.profile_url,
-        profile_pictures: reactor.profile_pictures,
+        profile_pictures: reactor.profile_pictures as Database['public']['Tables']['profiles']['Insert']['profile_pictures'],
         last_updated: new Date().toISOString()
       }
       
@@ -232,7 +274,7 @@ async function upsertProfilesWithDualIdentifiers(supabase: any, profiles: any[])
 }
 
 // Auto-enrichment function for newly discovered profiles
-async function autoEnrichProfiles(supabase: any, userId: string, progressId: string, newlyUpsertedProfileIds: string[]) {
+async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: string, progressId: string, newlyUpsertedProfileIds: string[]): Promise<EnrichmentResult> {
   console.log(`🔍 Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`)
   
       // Update progress to show we're checking for enrichment
@@ -333,7 +375,7 @@ async function autoEnrichProfiles(supabase: any, userId: string, progressId: str
     const profileIdentifiers = profilesToEnrich.map(profile => {
       const match = profile.profile_url?.match(/\/in\/([^\/\?]+)/)
       return match ? match[1] : profile.profile_url
-    }).filter(Boolean)
+    }).filter((id): id is string => Boolean(id))
     
     if (profileIdentifiers.length === 0) {
       console.warn('No valid profile identifiers found for enrichment')
@@ -397,7 +439,7 @@ async function autoEnrichProfiles(supabase: any, userId: string, progressId: str
     
     // Process and save enriched data (similar to enrich-profiles-progress route)
     const validEnrichedProfiles = enrichedData.filter(profile => 
-      profile.basic_info && !profile.basic_info.error_message?.includes('No profile found')
+      profile.basic_info && !(profile.basic_info as Record<string, unknown>).error_message?.toString().includes('No profile found')
     )
     
     let updatedCount = 0
@@ -518,17 +560,7 @@ async function autoEnrichProfiles(supabase: any, userId: string, progressId: str
 }
 
 // Store progress data in memory
-const progressStore = new Map<string, {
-  status: 'starting' | 'scraping' | 'processing' | 'saving' | 'completed' | 'error'
-  progress: number
-  currentStep: string
-  totalPosts?: number
-  processedPosts?: number
-  totalReactions?: number
-  processedReactions?: number
-  error?: string
-  result?: any
-}>()
+const progressStore = new Map<string, ProgressData>()
 
 export async function POST(request: NextRequest) {
   const progressId = Math.random().toString(36).substring(7)
@@ -624,14 +656,19 @@ export async function GET(request: NextRequest) {
 
 async function processReactionsScraping(
   progressId: string,
-  posts: any[],
-  user: any,
+  posts: Database['public']['Tables']['posts']['Row'][],
+  user: UserData,
   apifyApiKey: string
 ) {
   const supabase = await createClient()
   
   try {
-    const results: any[] = []
+    const results: Array<{
+      postId: string
+      postUrl: string
+      reactionsCount: number
+      profilesCount: number
+    }> = []
     const errors: string[] = []
     const allNewlyUpsertedProfileIds: string[] = [] // Track all profiles that need enrichment
 
@@ -738,7 +775,7 @@ async function processReactionsScraping(
             })
           } else {
             // Process profiles with sophisticated deduplication
-            const uniqueProfiles = new Map<string, any>()
+            const uniqueProfiles = new Map<string, ReactorProfile>()
             
             validReactions.forEach(reaction => {
               // Use a composite key for better deduplication
@@ -752,8 +789,8 @@ async function processReactionsScraping(
 
             // Upsert profiles using new dual identifier system
             const profilesToUpsert = Array.from(uniqueProfiles.values())
-            let profilesWithIds = []
-            let newlyUpsertedProfileIds = []
+            let profilesWithIds: ProfileWithId[] = []
+            const newlyUpsertedProfileIds: string[] = []
 
             if (profilesToUpsert.length > 0) {
               try {
@@ -777,7 +814,7 @@ async function processReactionsScraping(
               // match by order and fall back to URN/identifier matching
               const uniqueProfilesArray = Array.from(uniqueProfiles.values())
               
-              profilesWithIds?.forEach((profile: any, index: number) => {
+              profilesWithIds?.forEach((profile: ProfileWithId, index: number) => {
                 // Primary: match by index since upsertProfilesWithDualIdentifiers processes in the same order
                 if (index < uniqueProfilesArray.length) {
                   const originalReactor = uniqueProfilesArray[index]
@@ -820,7 +857,7 @@ async function processReactionsScraping(
                   reactor_profile_id: profileId,
                   reaction_type: reaction.reaction_type,
                   scraped_at: new Date().toISOString(),
-                  page_number: reaction._metadata?.page_number || 1
+                  page_number: (reaction._metadata as Record<string, unknown>)?.page_number as number || 1
                 }
               })
 

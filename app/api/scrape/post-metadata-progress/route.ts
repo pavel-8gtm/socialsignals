@@ -1,17 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { ApifyService, type ApifyPostDetailData } from '@/lib/services/apify'
+import { ApifyService } from '@/lib/services/apify'
+import type { Database } from '@/lib/types/database.types'
 
-// Store progress data in memory
-const progressStore = new Map<string, {
+interface ProgressData {
   status: 'starting' | 'scraping' | 'processing' | 'saving' | 'completed' | 'error'
   progress: number
   currentStep: string
   totalPosts?: number
   processedPosts?: number
   error?: string
-  result?: any
-}>()
+  result?: Record<string, unknown>
+}
+
+interface UserData {
+  id: string
+}
+
+// Store progress data in memory
+const progressStore = new Map<string, ProgressData>()
 
 export async function POST(request: NextRequest) {
   const progressId = Math.random().toString(36).substring(7)
@@ -107,14 +114,19 @@ export async function GET(request: NextRequest) {
 
 async function processMetadataScraping(
   progressId: string,
-  posts: any[],
-  user: any,
+  posts: Database['public']['Tables']['posts']['Row'][],
+  user: UserData,
   apifyApiKey: string
 ) {
   const supabase = await createClient()
   
   try {
-    const results: any[] = []
+    const results: Array<{
+      postId: string
+      postUrl: string
+      status: string
+      error?: string
+    }> = []
     const errors: string[] = []
 
     // Update progress: Starting scraper
@@ -179,7 +191,7 @@ async function processMetadataScraping(
               newStats.num_shares !== current.num_shares
 
             // Prepare update data
-            const updateData: any = {
+            const updateData: Partial<Database['public']['Tables']['posts']['Update']> = {
               post_text: postDetail.post.text,
               num_likes: newStats.num_likes,
               num_comments: newStats.num_comments,
@@ -214,8 +226,7 @@ async function processMetadataScraping(
               return {
                 postId: post.id,
                 postUrl: post.post_url,
-                updated: true,
-                engagementChanged
+                status: 'success'
               }
             }
 
@@ -224,7 +235,7 @@ async function processMetadataScraping(
           return {
             postId: post.id,
             postUrl: post.post_url,
-            updated: false,
+            status: 'failed',
             engagementChanged: false,
             error: error instanceof Error ? error.message : 'Unknown error'
           }
@@ -247,8 +258,7 @@ async function processMetadataScraping(
           results.push({
             postId: post.id,
             postUrl: post.post_url,
-            updated: false,
-            engagementChanged: false,
+            status: 'failed',
             error: result.reason
           })
         }
@@ -262,15 +272,15 @@ async function processMetadataScraping(
     }
 
     // Final progress update
-    const successfulUpdates = results.filter(r => r.updated).length
-    const engagementChanges = results.filter(r => r.engagementChanged).length
+    const successfulUpdates = results.filter(r => r.status === 'success').length
+    const failedUpdates = results.filter(r => r.status === 'failed').length
     
     let message = `Successfully fetched metadata for ${posts.length} posts`
     if (successfulUpdates > 0) {
       message += ` • ${successfulUpdates} posts updated`
     }
-    if (engagementChanges > 0) {
-      message += ` • ${engagementChanges} posts have new engagement and need re-scraping`
+    if (failedUpdates > 0) {
+      message += ` • ${failedUpdates} posts failed to update`
     }
     if (errors.length > 0) {
       message += ` • ${errors.length} errors occurred`
@@ -286,7 +296,7 @@ async function processMetadataScraping(
         message,
         postsProcessed: posts.length,
         successfulUpdates,
-        engagementChanges,
+        failedUpdates,
         results,
         errors
       }

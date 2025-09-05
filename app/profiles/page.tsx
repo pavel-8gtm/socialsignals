@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Calendar } from '@/components/ui/calendar'
 import { ChevronDown, CalendarIcon, X, Send } from 'lucide-react'
-import { format, startOfDay, endOfDay, subDays, subWeeks, subMonths, isAfter, isBefore } from 'date-fns'
+import { format, startOfDay, endOfDay, subDays, subMonths, isAfter, isBefore } from 'date-fns'
 import type { Database } from '@/lib/types/database.types'
 
 type EngagementTimelineItem = {
@@ -302,7 +302,7 @@ export default function ProfilesPage() {
   const [paginatedProfiles, setPaginatedProfiles] = useState<Profile[]>([])
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage] = useState(100)
-  const [user, setUser] = useState<any>(null)
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company'>('latest_post')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
@@ -413,7 +413,7 @@ export default function ProfilesPage() {
       profile.last_name || '',
       profile.urn || '',
       profile.profile_url || '',
-      profile.profile_picture_url || profile.profile_pictures?.small || '',
+      profile.profile_picture_url || ((profile.profile_pictures as Record<string, unknown>)?.small as string) || '',
       profile.country || '',
       profile.city || '',
       profile.headline || '',
@@ -494,7 +494,7 @@ export default function ProfilesPage() {
       headers.join(','),
       ...csvData.map(row => 
         headers.map(header => {
-          const value = row[header] || ''
+          const value = (row as Record<string, unknown>)[header] || ''
           // Escape quotes and wrap in quotes if contains comma
           return typeof value === 'string' && (value.includes(',') || value.includes('"')) 
             ? `"${value.replace(/"/g, '""')}"` 
@@ -518,7 +518,7 @@ export default function ProfilesPage() {
 
   useEffect(() => {
     loadUser()
-  }, [])
+  }, [loadUser])
 
   useEffect(() => {
     if (user) {
@@ -675,17 +675,17 @@ export default function ProfilesPage() {
       
       // For each profile, we need to find unique posts they engaged with
       // Group reactions by profile first (data structure is now different)
-      const reactionsByProfile = new Map<string, any[]>()
+      const reactionsByProfile = new Map<string, Array<Record<string, unknown>>>()
       reactionsData?.forEach(post => {
         // Each post can have multiple reactions, group by reactor profile
         post.reactions?.forEach(reaction => {
-        const profile = reaction.profiles
+        const profile = (reaction.profiles as unknown) as Record<string, unknown>
           if (!profile) return
           
-          if (!reactionsByProfile.has(profile.id)) {
-            reactionsByProfile.set(profile.id, [])
+          if (!reactionsByProfile.has(profile.id as string)) {
+            reactionsByProfile.set(profile.id as string, [])
           }
-          reactionsByProfile.get(profile.id)!.push({
+          reactionsByProfile.get(profile.id as string)!.push({
             ...reaction,
             post: {
               id: post.id,
@@ -699,17 +699,17 @@ export default function ProfilesPage() {
       })
       
       // Group comments by profile (data structure is now different)
-      const commentsByProfile = new Map<string, any[]>()
+      const commentsByProfile = new Map<string, Array<Record<string, unknown>>>()
       commentsData?.forEach(post => {
         // Each post can have multiple comments, group by commenter profile
         post.comments?.forEach(comment => {
-          const profile = comment.profiles
+          const profile = (comment.profiles as unknown) as Record<string, unknown>
           if (!profile) return
           
-          if (!commentsByProfile.has(profile.id)) {
-            commentsByProfile.set(profile.id, [])
+          if (!commentsByProfile.has(profile.id as string)) {
+            commentsByProfile.set(profile.id as string, [])
           }
-          commentsByProfile.get(profile.id)!.push({
+          commentsByProfile.get(profile.id as string)!.push({
             ...comment,
             post: {
               id: post.id,
@@ -742,10 +742,10 @@ export default function ProfilesPage() {
         
         // Add reacted posts
         reactions.forEach(reaction => {
-          const post = reaction.post
+          const post = reaction.post as Record<string, unknown>
           if (!post) return
           
-          postsMap.set(post.id, {
+          postsMap.set(post.id as string, {
             ...post,
             engagement_types: ['reaction'],
             reaction_type: reaction.reaction_type
@@ -754,15 +754,15 @@ export default function ProfilesPage() {
         
         // Add commented posts (merge if already exists)
         comments.forEach(comment => {
-          const post = comment.post
+          const post = comment.post as Record<string, unknown>
           if (!post) return
           
-          const existing = postsMap.get(post.id)
+          const existing = postsMap.get(post.id as string)
           if (existing) {
-            existing.engagement_types.push('comment')
+            (existing.engagement_types as string[]).push('comment')
             existing.comment_text = comment.comment_text
           } else {
-            postsMap.set(post.id, {
+            postsMap.set(post.id as string, {
               ...post,
               engagement_types: ['comment'],
               comment_text: comment.comment_text
@@ -778,7 +778,7 @@ export default function ProfilesPage() {
         const totalComments = uniquePosts.filter(post => post.engagement_types.includes('comment')).length
         
         // Debug Yoav specifically
-        if (profile.name?.includes('Yoav Eitani')) {
+        if (((profile as Record<string, unknown>).name as string)?.includes('Yoav Eitani')) {
           console.log(`🔍 Yoav aggregation: ${totalPosts} posts, ${totalReactions} reactions, ${totalComments} comments`)
           uniquePosts.forEach((post, index) => {
             if (post.engagement_types.includes('reaction')) {
@@ -800,7 +800,7 @@ export default function ProfilesPage() {
           const postDate = post.posted_at_iso ? new Date(post.posted_at_iso) : new Date(0)
           const latestDate = latest ? new Date(latest.posted_at_iso || 0) : new Date(0)
           return postDate > latestDate ? post : latest
-        }, null as any)
+        }, null as Record<string, unknown> | null)
 
         // Determine the latest engagement type (Like or Comment)
         // Find the most recent post this profile engaged with, then check engagement type
@@ -813,12 +813,12 @@ export default function ProfilesPage() {
         if (latestPost && latestPost.post_id) {
           // Check if they reacted to the latest post
           const reactedToLatestPost = profileReactions.some(reaction => 
-            reaction.post && reaction.post.post_id === latestPost.post_id
+            reaction.post && (reaction.post as Record<string, unknown>).post_id === (latestPost as Record<string, unknown>).post_id
           )
           
           // Check if they commented on the latest post
           const commentedOnLatestPost = profileComments.some(comment => 
-            comment.post && comment.post.post_id === latestPost.post_id
+            comment.post && (comment.post as Record<string, unknown>).post_id === (latestPost as Record<string, unknown>).post_id
           )
           
           // If they did both on the same post, prefer Comment
@@ -832,23 +832,23 @@ export default function ProfilesPage() {
 
         // Store in profiles map
         profilesMap.set(profileId, {
-          ...profile,
+          ...(profile as Record<string, unknown>),
           total_reactions: totalReactions,
           total_comments: totalComments,
           posts_engaged_with: totalPosts,
           latest_post_date: latestPostDate,
           latest_post_url: latestPost?.post_url || null,
           latest_engagement_type: latestEngagementType,
-          reaction_types: profileReactions.map(r => r.reaction_type).filter((v, i, a) => a.indexOf(v) === i),
+          reaction_types: profileReactions.map(r => r.reaction_type as string).filter((v, i, a) => a.indexOf(v) === i),
           posts: uniquePosts.map(post => ({
-            post_id: post.post_id,
-            post_url: post.post_url,
-            engagement_type: post.engagement_types.join(','),
-            reaction_type: post.reaction_type,
-            comment_text: post.comment_text,
-            created_at: post.posted_at_iso || ''
+            post_id: (post as Record<string, unknown>).post_id as string,
+            post_url: (post as Record<string, unknown>).post_url as string,
+            engagement_type: ((post as Record<string, unknown>).engagement_types as string[]).includes('comment') ? 'comment' as const : 'reaction' as const,
+            reaction_type: (post as Record<string, unknown>).reaction_type as string,
+            comment_text: (post as Record<string, unknown>).comment_text as string,
+            created_at: ((post as Record<string, unknown>).posted_at_iso as string) || ''
           }))
-        })
+        } as Profile)
       })
 
       const profilesArray = Array.from(profilesMap.values())
@@ -1282,7 +1282,7 @@ export default function ProfilesPage() {
     // Apply date filters
     result = result.filter(profile => {
       // Latest post date filter
-      if (!isDateInRange(profile.latest_post_date, dateFilters.latestPost)) {
+      if (!isDateInRange(profile.latest_post_date || null, dateFilters.latestPost)) {
         return false
       }
       
@@ -1668,7 +1668,7 @@ export default function ProfilesPage() {
                               checked={isAllCurrentPageSelected}
                               ref={(el) => {
                                 if (el) {
-                                  el.indeterminate = !isAllCurrentPageSelected && isSomeCurrentPageSelected
+                                  (el as HTMLInputElement).indeterminate = !isAllCurrentPageSelected && isSomeCurrentPageSelected
                                 }
                               }}
                               onChange={() => {}}
@@ -1802,7 +1802,7 @@ export default function ProfilesPage() {
                           {/* Profile Picture */}
                           {(() => {
                             const profilePictureUrl = profile.profile_picture_url || 
-                              (profile.profile_pictures?.small);
+                              ((profile.profile_pictures as Record<string, unknown>)?.small as string);
                             
                             return profilePictureUrl ? (
                               <img

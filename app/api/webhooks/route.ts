@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import type { Database } from '@/lib/types/database.types';
 
 interface WebhookCreateData {
   name: string;
@@ -137,7 +138,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Update webhook
-    const updateFields: any = {
+    const updateFields: Partial<Database['public']['Tables']['webhooks']['Update']> = {
       updated_at: new Date().toISOString()
     };
 
