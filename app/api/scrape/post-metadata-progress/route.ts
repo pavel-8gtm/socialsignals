@@ -17,20 +17,61 @@ interface UserData {
   id: string
 }
 
-// Store progress data in memory
-const progressStore = new Map<string, ProgressData>()
+// Helper functions for database progress tracking
+async function saveProgress(supabase: Awaited<ReturnType<typeof createClient>>, progressId: string, userId: string, data: ProgressData) {
+  const { error } = await supabase
+    .from('api_progress')
+    .upsert({
+      id: progressId,
+      user_id: userId,
+      status: data.status,
+      progress: data.progress,
+      current_step: data.currentStep,
+      total_posts: data.totalPosts,
+      processed_posts: data.processedPosts,
+      error_message: data.error,
+      result: data.result,
+      updated_at: new Date().toISOString()
+    })
+  
+  if (error) {
+    console.error('Failed to save progress:', error)
+  }
+}
+
+async function getProgress(supabase: Awaited<ReturnType<typeof createClient>>, progressId: string): Promise<ProgressData | null> {
+  const { data, error } = await supabase
+    .from('api_progress')
+    .select('*')
+    .eq('id', progressId)
+    .single()
+  
+  if (error || !data) {
+    return null
+  }
+  
+  return {
+    status: data.status,
+    progress: data.progress,
+    currentStep: data.current_step,
+    totalPosts: data.total_posts,
+    processedPosts: data.processed_posts,
+    error: data.error_message,
+    result: data.result
+  }
+}
 
 export async function POST(request: NextRequest) {
   const progressId = Math.random().toString(36).substring(7)
+  const supabase = await createClient()
+  
+  // Check authentication
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   
   try {
-    const supabase = await createClient()
-    
-    // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
 
     const body = await request.json()
     const { postIds } = body
@@ -63,8 +104,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No valid posts found' }, { status: 404 })
     }
 
-    // Initialize progress tracking
-    progressStore.set(progressId, {
+    // Initialize progress tracking in database
+    await saveProgress(supabase, progressId, user.id, {
       status: 'starting',
       progress: 0,
       currentStep: 'Initializing metadata scraper...',
@@ -73,13 +114,13 @@ export async function POST(request: NextRequest) {
     })
 
     // Start the scraping process asynchronously
-    processMetadataScraping(progressId, posts, user, userSettings.apify_api_key)
+    processMetadataScraping(progressId, posts, user, userSettings.apify_api_key, supabase)
 
     return NextResponse.json({ progressId })
 
   } catch (error) {
     console.error('Error starting metadata scraping:', error)
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'error',
       progress: 0,
       currentStep: 'Failed to start',
@@ -99,26 +140,41 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Progress ID is required' }, { status: 400 })
   }
 
-  const progress = progressStore.get(progressId)
-  if (!progress) {
-    return NextResponse.json({ error: 'Progress not found' }, { status: 404 })
-  }
+  try {
+    const supabase = await createClient()
+    
+    // Check authentication
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-  // Clean up completed/error entries after they're retrieved
-  if (progress.status === 'completed' || progress.status === 'error') {
-    setTimeout(() => progressStore.delete(progressId), 30000)
-  }
+    const progress = await getProgress(supabase, progressId)
+    if (!progress) {
+      return NextResponse.json({ error: 'Progress not found' }, { status: 404 })
+    }
 
-  return NextResponse.json(progress)
+    // Clean up completed/error entries after they're retrieved
+    if (progress.status === 'completed' || progress.status === 'error') {
+      setTimeout(async () => {
+        await supabase.from('api_progress').delete().eq('id', progressId)
+      }, 30000)
+    }
+
+    return NextResponse.json(progress)
+  } catch (error) {
+    console.error('Error retrieving progress:', error)
+    return NextResponse.json({ error: 'Failed to retrieve progress' }, { status: 500 })
+  }
 }
 
 async function processMetadataScraping(
   progressId: string,
   posts: Database['public']['Tables']['posts']['Row'][],
   user: UserData,
-  apifyApiKey: string
+  apifyApiKey: string,
+  supabase: Awaited<ReturnType<typeof createClient>>
 ) {
-  const supabase = await createClient()
   
   try {
     const results: Array<{
@@ -130,7 +186,7 @@ async function processMetadataScraping(
     const errors: string[] = []
 
     // Update progress: Starting scraper
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'scraping',
       progress: 10,
       currentStep: 'Starting metadata scraper...',
@@ -148,7 +204,7 @@ async function processMetadataScraping(
       const batch = posts.slice(i, i + concurrencyLimit)
       const batchProgress = (i / posts.length) * 70 + 10 // 10-80%
 
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, user.id, {
         status: 'scraping',
         progress: batchProgress,
         currentStep: `Fetching metadata for posts ${i + 1}-${Math.min(i + concurrencyLimit, posts.length)} of ${posts.length}...`,
@@ -263,11 +319,7 @@ async function processMetadataScraping(
           })
         }
 
-        // Update processed count
-        progressStore.set(progressId, {
-          ...progressStore.get(progressId)!,
-          processedPosts: globalIndex + 1
-        })
+        // Note: Progress updates are handled in the batch completion
       })
     }
 
@@ -286,7 +338,7 @@ async function processMetadataScraping(
       message += ` • ${errors.length} errors occurred`
     }
 
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'completed',
       progress: 100,
       currentStep: 'Completed successfully',
@@ -306,7 +358,7 @@ async function processMetadataScraping(
 
   } catch (error) {
     console.error('Error in metadata scraping:', error)
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'error',
       progress: 0,
       currentStep: 'Error occurred',
