@@ -503,14 +503,15 @@ export default function PostsPage() {
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
 
-      // Set appropriate success/error message
+      // Set appropriate success/error message with detailed stats
       if (reactionsSuccess && commentsSuccess) {
-        setSuccess(`Successfully scraped both reactions (${reactionsData?.totalReactions || 0}) and comments (${commentsData?.totalComments || 0}) for ${selectedPosts.size} posts`)
+        const totalEngagement = (reactionsData?.totalReactions || 0) + (commentsData?.totalComments || 0)
+        setSuccess(`Successfully scraped ${reactionsData?.totalReactions || 0} reactions and ${commentsData?.totalComments || 0} comments (${totalEngagement} total) for ${selectedPosts.size} posts`)
       } else if (reactionsSuccess || commentsSuccess) {
         const scraped = reactionsSuccess ? 'reactions' : 'comments'
         const failed = reactionsSuccess ? 'comments' : 'reactions'
         const scrapedCount = reactionsSuccess ? reactionsData?.totalReactions : commentsData?.totalComments
-        setSuccess(`Successfully scraped ${scraped} (${scrapedCount || 0} found) for ${selectedPosts.size} posts. ${failed} scraping had issues.`)
+        setSuccess(`Successfully scraped ${scrapedCount || 0} ${scraped} for ${selectedPosts.size} posts. ${failed} scraping had issues.`)
       } else {
         setError(`Failed to scrape engagements for ${selectedPosts.size} posts. Check the logs for details.`)
       }
@@ -664,7 +665,7 @@ export default function PostsPage() {
         { id: 'saving', label: 'Save to database', status: 'pending' }
       ]
       
-      progressTracking.startProgress('Fetching Post Metadata', initialSteps, postIds.length)
+      progressTracking.startProgress('Fetching Post Metadata', initialSteps) // Don't show misleading item count
       progressTracking.updateStep('init', { id: 'init', label: 'Starting metadata scraping...', status: 'running' })
 
       // Get auth token for Edge Functions
@@ -702,9 +703,18 @@ export default function PostsPage() {
 
       const result = await response.json()
       
+      // Show detailed stats about what was found and what needs re-scraping
+      const engagementChanges = result.postsWithEngagementChanges || 0
+      const totalPosts = result.processedPosts || 0
+      
+      let statsMessage = `Metadata completed (${totalPosts} posts processed)`
+      if (engagementChanges > 0) {
+        statsMessage += ` • ${engagementChanges} posts have engagement changes and need re-scraping`
+      }
+      
       progressTracking.updateStep('scraping', { 
         id: 'scraping', 
-        label: `Metadata completed (${result.processedPosts || 0} posts processed)`, 
+        label: statsMessage,
         status: 'completed' 
       })
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
@@ -714,6 +724,14 @@ export default function PostsPage() {
       
       // Clear selection after successful completion
       setSelectedPosts(new Set())
+      await loadPosts() // Refresh the UI to show updated metadata
+      
+      // Show success message with engagement stats
+      if (engagementChanges > 0) {
+        setSuccess(`Metadata updated for ${totalPosts} posts. ${engagementChanges} posts have engagement changes and are marked for re-scraping (look for 'New' badges).`)
+      } else {
+        setSuccess(`Metadata updated for ${totalPosts} posts. No engagement changes detected.`)
+      }
       
     } catch (error) {
       console.error('Error fetching metadata:', error)
@@ -745,7 +763,7 @@ export default function PostsPage() {
         { id: 'saving', label: 'Save to database', status: 'pending' }
       ]
       
-      progressTracking.startProgress('Fetching Post Metadata', initialSteps, postIds.length)
+      progressTracking.startProgress('Fetching Post Metadata', initialSteps) // Don't show misleading item count
       progressTracking.updateStep('init', { id: 'init', label: 'Starting metadata scraping...', status: 'running' })
 
       // Get auth token for Edge Functions
@@ -792,6 +810,9 @@ export default function PostsPage() {
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
+      
+      // Reload posts to show updated metadata
+      await loadPosts()
       
     } catch (error) {
       console.error('Error fetching metadata for new posts:', error)

@@ -14,6 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
+      api_progress: {
+        Row: {
+          created_at: string | null
+          current_step: string
+          error_message: string | null
+          id: string
+          processed_posts: number | null
+          progress: number
+          result: Json | null
+          status: string
+          total_posts: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          current_step: string
+          error_message?: string | null
+          id: string
+          processed_posts?: number | null
+          progress?: number
+          result?: Json | null
+          status: string
+          total_posts?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          current_step?: string
+          error_message?: string | null
+          id?: string
+          processed_posts?: number | null
+          progress?: number
+          result?: Json | null
+          status?: string
+          total_posts?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       comments: {
         Row: {
           comment_id: string
@@ -352,7 +394,7 @@ export type Database = {
           user_id: string
         }
         Update: {
-          apify_api_key?: string | null
+          apify_api_key?: string
           created_at?: string | null
           id?: string
           last_sync_time?: string | null
