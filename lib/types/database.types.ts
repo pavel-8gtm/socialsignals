@@ -86,39 +86,6 @@ export type Database = {
           },
         ]
       }
-      webhooks: {
-        Row: {
-          created_at: string | null
-          description: string | null
-          id: string
-          is_active: boolean | null
-          name: string
-          updated_at: string | null
-          url: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string | null
-          description?: string | null
-          id?: string
-          is_active?: boolean | null
-          name: string
-          updated_at?: string | null
-          url: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string | null
-          description?: string | null
-          id?: string
-          is_active?: boolean | null
-          name?: string
-          updated_at?: string | null
-          url?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
       posts: {
         Row: {
           author_name: string | null
@@ -142,6 +109,7 @@ export type Database = {
           posted_at_iso: string | null
           posted_at_timestamp: number | null
           scraped_at: string | null
+          starred: boolean | null
           updated_at: string | null
           user_id: string
         }
@@ -167,6 +135,7 @@ export type Database = {
           posted_at_iso?: string | null
           posted_at_timestamp?: number | null
           scraped_at?: string | null
+          starred?: boolean | null
           updated_at?: string | null
           user_id: string
         }
@@ -192,6 +161,7 @@ export type Database = {
           posted_at_iso?: string | null
           posted_at_timestamp?: number | null
           scraped_at?: string | null
+          starred?: boolean | null
           updated_at?: string | null
           user_id?: string
         }
@@ -388,6 +358,39 @@ export type Database = {
           last_sync_time?: string | null
           monitored_profiles?: string[] | null
           updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      webhooks: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          id: string
+          is_active: boolean | null
+          name: string
+          updated_at: string | null
+          url: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          updated_at?: string | null
+          url: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          updated_at?: string | null
+          url?: string
           user_id?: string
         }
         Relationships: []

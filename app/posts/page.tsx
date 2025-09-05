@@ -20,7 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ProgressOverlay, useProgressTracking, type ProgressStep } from '@/components/ui/progress-overlay'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Calendar } from '@/components/ui/calendar'
-import { ChevronDownIcon, CalendarIcon } from 'lucide-react'
+import { ChevronDownIcon, CalendarIcon, Star } from 'lucide-react'
 import { format } from 'date-fns'
 import type { Database } from '@/lib/types/database.types'
 
@@ -58,6 +58,7 @@ export default function PostsPage() {
   const [monitoredProfiles, setMonitoredProfiles] = useState<string[]>([])
   const [selectedMonitoredProfiles, setSelectedMonitoredProfiles] = useState<Set<string>>(new Set())
   const [recentlyAddedPosts, setRecentlyAddedPosts] = useState<Set<string>>(new Set())
+  const [showStarredOnly, setShowStarredOnly] = useState(false)
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -270,6 +271,33 @@ export default function PostsPage() {
       return 0
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  async function togglePostStar(postId: string) {
+    try {
+      const post = posts.find(p => p.id === postId)
+      if (!post) return
+
+      const newStarredValue = !post.starred
+      
+      const { error } = await supabase
+        .from('posts')
+        .update({ starred: newStarredValue })
+        .eq('id', postId)
+
+      if (error) {
+        setError(error.message)
+      } else {
+        // Update the local state
+        setPosts(prevPosts => 
+          prevPosts.map(p => 
+            p.id === postId ? { ...p, starred: newStarredValue } : p
+          )
+        )
+      }
+    } catch {
+      setError('Failed to update post star status')
     }
   }
 
@@ -1024,6 +1052,11 @@ export default function PostsPage() {
     // First apply filters
     let filtered = posts
     
+    // Apply starred filter - show only starred posts
+    if (showStarredOnly) {
+      filtered = filtered.filter(post => post.starred === true)
+    }
+    
     // Apply scraping filter - show posts that need scraping (either never scraped or need re-scraping)
     if (showNeedingScrapingOnly) {
       filtered = filtered.filter(post => 
@@ -1083,7 +1116,7 @@ export default function PostsPage() {
     })
 
     return sorted
-  }, [posts, sortBy, sortOrder, showNeedingScrapingOnly, authorFilter])
+  }, [posts, sortBy, sortOrder, showNeedingScrapingOnly, showStarredOnly, authorFilter])
 
   // Pagination logic
   const totalPages = Math.ceil(filteredAndSortedPosts.length / itemsPerPage)
@@ -1096,7 +1129,7 @@ export default function PostsPage() {
   // Reset to first page when filters change
   React.useEffect(() => {
     setCurrentPage(1)
-  }, [showNeedingScrapingOnly, authorFilter, sortBy, sortOrder])
+  }, [showNeedingScrapingOnly, showStarredOnly, authorFilter, sortBy, sortOrder])
 
   // Count posts needing scraping
   const postsNeedingScraping = React.useMemo(() => {
@@ -1107,6 +1140,11 @@ export default function PostsPage() {
       (post.engagement_needs_scraping === true && 
        (post.last_reactions_scrape || post.last_comments_scrape))
     ).length
+  }, [posts])
+
+  // Count starred posts
+  const starredPostsCount = React.useMemo(() => {
+    return posts.filter(post => post.starred === true).length
   }, [posts])
 
   // Watch for changes in the textarea to validate in real-time
@@ -1550,6 +1588,26 @@ export default function PostsPage() {
                   {showNeedingScrapingOnly ? "Show all posts" : `Show posts needing scraping (${postsNeedingScraping})`}
                 </button>
               )}
+              
+              {starredPostsCount > 0 && (
+                <button
+                  onClick={() => {
+                    setShowStarredOnly(!showStarredOnly)
+                    if (!showStarredOnly) {
+                      setAuthorFilter('') // Clear author filter
+                      setShowNeedingScrapingOnly(false) // Clear scraping filter
+                    }
+                  }}
+                  className={`text-sm cursor-pointer transition-colors border-b border-dotted whitespace-nowrap ${
+                    showStarredOnly 
+                      ? "text-yellow-600 border-yellow-600" 
+                      : "text-gray-600 hover:text-yellow-600 border-gray-400 hover:border-yellow-600"
+                  }`}
+                  title={showStarredOnly ? "Show all posts" : "Show only starred posts that need rescraping"}
+                >
+                  {showStarredOnly ? "Show all posts" : `Show starred posts (${starredPostsCount})`}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1635,6 +1693,9 @@ export default function PostsPage() {
                         onCheckedChange={toggleSelectAll}
                         aria-label="Select all visible posts"
                       />
+                    </TableHead>
+                    <TableHead className="w-12 text-center" title="Star posts that need rescraping">
+                      <Star className="h-4 w-4 mx-auto text-gray-400" />
                     </TableHead>
                     <TableHead>Content</TableHead>
                     <TableHead 
@@ -1722,6 +1783,21 @@ export default function PostsPage() {
                           onCheckedChange={() => togglePostSelection(post.id)}
                           aria-label={`Select post ${post.post_id}`}
                         />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <button
+                          onClick={() => togglePostStar(post.id)}
+                          className="p-1 hover:bg-gray-100 rounded transition-colors"
+                          title={post.starred ? "Remove from starred posts" : "Star this post for rescraping"}
+                        >
+                          <Star 
+                            className={`h-4 w-4 ${
+                              post.starred 
+                                ? "text-yellow-500 fill-yellow-500" 
+                                : "text-gray-300 hover:text-yellow-400"
+                            }`} 
+                          />
+                        </button>
                       </TableCell>
                       <TableCell className="max-w-xs">
                         <div className="flex items-center gap-2">
@@ -2046,10 +2122,37 @@ export default function PostsPage() {
                           💬 <span className="font-medium text-green-600">{previewPost.comments_count || 0}</span> comments scraped
                         </span>
                       </div>
-                    </>
-                  )}
-                </div>
-              )}
+                                  </>
+            )}
+            
+            {/* Quick action for starred posts */}
+            {starredPostsCount > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  // Get all starred post IDs
+                  const starredPostIds = posts
+                    .filter(post => post.starred === true)
+                    .map(post => post.id)
+                  
+                  // Set them as selected
+                  setSelectedPosts(new Set(starredPostIds))
+                  
+                  // Trigger metadata scraping
+                  setTimeout(() => {
+                    handleAction('metadata')
+                  }, 100)
+                }}
+                disabled={isSaving}
+                size="sm"
+                className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
+              >
+                <Star className="h-4 w-4 mr-1 text-yellow-500" />
+                Scrape All Starred Posts ({starredPostsCount})
+              </Button>
+            )}
+          </div>
+        )}
 
               <div className="flex gap-2 pt-4">
                 <Button asChild variant="outline">

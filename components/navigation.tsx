@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
@@ -46,7 +47,14 @@ export default function Navigation() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
-              <Link href="/" className="text-xl font-bold text-gray-900">
+              <Link href="/" className="flex items-center gap-2 text-lg font-bold text-gray-900">
+                <Image 
+                  src="/linkedin-icon.png" 
+                  alt="LinkedIn" 
+                  width={24} 
+                  height={24}
+                  className="w-6 h-6"
+                />
                 SocialSignals
               </Link>
             </div>
@@ -64,7 +72,14 @@ export default function Navigation() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center">
-            <Link href="/" className="text-xl font-bold text-gray-900">
+            <Link href="/" className="flex items-center gap-2 text-lg font-bold text-gray-900">
+              <Image 
+                src="/linkedin-icon.png" 
+                alt="LinkedIn" 
+                width={24} 
+                height={24}
+                className="w-6 h-6"
+              />
               SocialSignals
             </Link>
           </div>
