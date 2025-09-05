@@ -19,25 +19,65 @@ interface UserData {
   id: string
 }
 
-// Store progress data in memory (for demo purposes - in production, consider Redis)
-const progressStore = new Map<string, ProgressData>()
+// Helper functions for database progress tracking
+async function saveProgress(supabase: Awaited<ReturnType<typeof createClient>>, progressId: string, userId: string, data: ProgressData) {
+  const { error } = await supabase
+    .from('api_progress')
+    .upsert({
+      id: progressId,
+      user_id: userId,
+      status: data.status,
+      progress: data.progress,
+      current_step: data.currentStep,
+      total_posts: data.totalPosts,
+      processed_posts: data.processedPosts,
+      error_message: data.error,
+      result: data.result,
+      updated_at: new Date().toISOString()
+    })
+  
+  if (error) {
+    console.error('Failed to save progress:', error)
+  }
+}
+
+async function getProgress(supabase: Awaited<ReturnType<typeof createClient>>, progressId: string): Promise<ProgressData | null> {
+  const { data, error } = await supabase
+    .from('api_progress')
+    .select('*')
+    .eq('id', progressId)
+    .single()
+  
+  if (error || !data) {
+    return null
+  }
+  
+  return {
+    status: data.status,
+    progress: data.progress,
+    currentStep: data.current_step,
+    totalPosts: data.total_posts,
+    processedPosts: data.processed_posts,
+    error: data.error_message,
+    result: data.result
+  }
+}
 
 export async function POST(request: NextRequest) {
   const progressId = Math.random().toString(36).substring(7)
+  const supabase = await createClient()
+
+  // Get authenticated user
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   
   try {
     const { profileUrl, scrapeUntilDate, maxPosts } = await request.json()
 
     if (!profileUrl) {
       return NextResponse.json({ error: 'Profile URL is required' }, { status: 400 })
-    }
-
-    const supabase = await createClient()
-
-    // Get authenticated user
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     // Get user's Apify API key
@@ -54,20 +94,20 @@ export async function POST(request: NextRequest) {
     }
 
     // Initialize progress tracking
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'starting',
       progress: 0,
       currentStep: 'Initializing scraper...'
     })
 
     // Start the scraping process asynchronously
-    processProfileScraping(progressId, profileUrl, user, userSettings.apify_api_key, scrapeUntilDate, maxPosts)
+    processProfileScraping(progressId, profileUrl, user, userSettings.apify_api_key, supabase, scrapeUntilDate, maxPosts)
 
     return NextResponse.json({ progressId })
 
   } catch (error) {
     console.error('Error starting profile posts scraping:', error)
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'error',
       progress: 0,
       currentStep: 'Failed to start',
@@ -87,17 +127,32 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Progress ID is required' }, { status: 400 })
   }
 
-  const progress = progressStore.get(progressId)
-  if (!progress) {
-    return NextResponse.json({ error: 'Progress not found' }, { status: 404 })
-  }
+  try {
+    const supabase = await createClient()
+    
+    // Check authentication
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-  // Clean up completed/error entries after they're retrieved
-  if (progress.status === 'completed' || progress.status === 'error') {
-    setTimeout(() => progressStore.delete(progressId), 30000) // Keep for 30 seconds
-  }
+    const progress = await getProgress(supabase, progressId)
+    if (!progress) {
+      return NextResponse.json({ error: 'Progress not found' }, { status: 404 })
+    }
 
-  return NextResponse.json(progress)
+    // Clean up completed/error entries after they're retrieved
+    if (progress.status === 'completed' || progress.status === 'error') {
+      setTimeout(async () => {
+        await supabase.from('api_progress').delete().eq('id', progressId)
+      }, 30000)
+    }
+
+    return NextResponse.json(progress)
+  } catch (error) {
+    console.error('Error retrieving progress:', error)
+    return NextResponse.json({ error: 'Failed to retrieve progress' }, { status: 500 })
+  }
 }
 
 async function processProfileScraping(
@@ -105,14 +160,14 @@ async function processProfileScraping(
   profileUrl: string,
   user: UserData,
   apifyApiKey: string,
+  supabase: Awaited<ReturnType<typeof createClient>>,
   scrapeUntilDate?: string,
   maxPosts?: string
 ) {
-  const supabase = await createClient()
   
   try {
     // Update progress: Starting scraper
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'scraping',
       progress: 10,
       currentStep: 'Starting profile scraper...'
@@ -124,7 +179,7 @@ async function processProfileScraping(
     const apifyService = new ApifyService(apifyApiKey)
 
     // Update progress: Scraping
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'scraping',
       progress: 20,
       currentStep: `Scraping posts from LinkedIn profile...`
@@ -140,7 +195,7 @@ async function processProfileScraping(
     console.log(`Scraped ${profilePosts.length} posts from profile`)
 
     if (profilePosts.length === 0) {
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, user.id, {
         status: 'completed',
         progress: 100,
         currentStep: 'No posts found',
@@ -156,7 +211,7 @@ async function processProfileScraping(
     }
 
     // Update progress: Processing posts
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'processing',
       progress: 40,
       currentStep: `Processing ${profilePosts.length} posts...`,
@@ -166,17 +221,6 @@ async function processProfileScraping(
 
     // Transform posts for database insertion
     const postsToInsert: Post[] = profilePosts.map((postData, index) => {
-      // Update progress for each post processed
-      const processedCount = index + 1
-      const processProgress = 40 + (processedCount / profilePosts.length) * 30 // 40-70%
-      
-      progressStore.set(progressId, {
-        status: 'processing',
-        progress: processProgress,
-        currentStep: `Processing post ${processedCount} of ${profilePosts.length}...`,
-        totalPosts: profilePosts.length,
-        processedPosts: processedCount
-      })
 
       // Extract post ID from URL
       const postIdMatch = postData.url.match(/activity-(\d+)/)
@@ -202,7 +246,7 @@ async function processProfileScraping(
     })
 
     // Update progress: Checking existing posts
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'processing',
       progress: 70,
       currentStep: 'Checking for existing posts...',
@@ -231,7 +275,7 @@ async function processProfileScraping(
     }
 
     // Update progress: Detecting engagement changes
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'processing',
       progress: 80,
       currentStep: 'Detecting engagement changes...',
@@ -259,7 +303,7 @@ async function processProfileScraping(
     })
 
     // Update progress: Saving to database
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'saving',
       progress: 90,
       currentStep: 'Saving posts to database...',
@@ -299,7 +343,7 @@ async function processProfileScraping(
     }
 
     // Final progress update
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'completed',
       progress: 100,
       currentStep: 'Completed successfully',
@@ -322,7 +366,7 @@ async function processProfileScraping(
 
   } catch (error) {
     console.error('Error in profile posts scraping:', error)
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'error',
       progress: 0,
       currentStep: 'Error occurred',

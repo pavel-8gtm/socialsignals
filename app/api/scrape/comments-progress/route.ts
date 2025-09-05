@@ -287,9 +287,9 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
   console.log(`🔍 Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`)
   
   // Update progress to show we're checking for enrichment
-  const currentProgress = progressStore.get(progressId)
+  const currentProgress = await getProgress(supabase, progressId)
   if (currentProgress) {
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, userId, {
       ...currentProgress,
       currentStep: `Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`,
       progress: 91,
@@ -303,7 +303,7 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     
     // Update progress to show no new profiles
     if (currentProgress) {
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, userId, {
         ...currentProgress,
         currentStep: 'No new profiles discovered • Finishing up...',
         progress: 98
@@ -331,7 +331,7 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     
     // Update progress to show no enrichment needed
     if (currentProgress) {
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, userId, {
         ...currentProgress,
         currentStep: 'Checked for enrichment: 0 profiles need enrichment • Finishing up...',
         progress: 98
@@ -345,7 +345,7 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
   
   // Update progress to show enrichment is starting with profile count
   if (currentProgress) {
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, userId, {
       ...currentProgress,
       currentStep: `Found ${profilesToEnrich.length} profiles needing enrichment • Preparing for LinkedIn Profile Enrichment...`,
       progress: 92,
@@ -385,9 +385,9 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     console.log(`📞 Calling Apify enrichment for ${profileIdentifiers.length} profiles`)
     
     // Update progress during Apify call
-    const enrichProgress = progressStore.get(progressId)
+    const enrichProgress = await getProgress(supabase, progressId)
     if (enrichProgress) {
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, userId, {
         ...enrichProgress,
         currentStep: `Sending ${profileIdentifiers.length} profiles to LinkedIn Profile Enrichment Scraper...`,
         progress: 94
@@ -395,10 +395,10 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     }
     
     // Quick update to show we're now waiting for results
-    setTimeout(() => {
-      const waitingProgress = progressStore.get(progressId)
+    setTimeout(async () => {
+      const waitingProgress = await getProgress(supabase, progressId)
       if (waitingProgress) {
-        progressStore.set(progressId, {
+        await saveProgress(supabase, progressId, userId, {
           ...waitingProgress,
           currentStep: `Waiting for LinkedIn Profile Enrichment results (${profileIdentifiers.length} profiles processing...)`,
           progress: 95
@@ -416,9 +416,9 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     console.log(`✅ Received enriched data for ${enrichedData.length} profiles`)
     
     // Update progress for processing phase
-    const processProgress = progressStore.get(progressId)
+    const processProgress = await getProgress(supabase, progressId)
     if (processProgress) {
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, userId, {
         ...processProgress,
         currentStep: `LinkedIn Profile Enrichment completed! Processing ${enrichedData.length} enriched profiles...`,
         progress: 96
@@ -520,7 +520,7 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     
     // Update progress to show enrichment completed
     if (currentProgress) {
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, userId, {
         ...currentProgress,
         currentStep: `Auto-enriched ${updatedCount} profiles • Completed successfully`
       })
@@ -532,7 +532,7 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     console.error('Auto-enrichment error:', enrichError)
     // Update progress to show enrichment failed but don't fail the main operation
     if (currentProgress) {
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, userId, {
         ...currentProgress,
         currentStep: 'Auto-enrichment failed, but scraping completed successfully'
       })
@@ -542,20 +542,61 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
   }
 }
 
-// Store progress data in memory
-const progressStore = new Map<string, ProgressData>()
+// Helper functions for database progress tracking
+async function saveProgress(supabase: Awaited<ReturnType<typeof createClient>>, progressId: string, userId: string, data: ProgressData) {
+  const { error } = await supabase
+    .from('api_progress')
+    .upsert({
+      id: progressId,
+      user_id: userId,
+      status: data.status,
+      progress: data.progress,
+      current_step: data.currentStep,
+      total_posts: data.totalPosts,
+      processed_posts: data.processedPosts,
+      error_message: data.error,
+      result: data.result,
+      updated_at: new Date().toISOString()
+    })
+  
+  if (error) {
+    console.error('Failed to save progress:', error)
+  }
+}
+
+async function getProgress(supabase: Awaited<ReturnType<typeof createClient>>, progressId: string): Promise<ProgressData | null> {
+  const { data, error } = await supabase
+    .from('api_progress')
+    .select('*')
+    .eq('id', progressId)
+    .single()
+  
+  if (error || !data) {
+    return null
+  }
+  
+  return {
+    status: data.status,
+    progress: data.progress,
+    currentStep: data.current_step,
+    totalPosts: data.total_posts,
+    processedPosts: data.processed_posts,
+    error: data.error_message,
+    result: data.result
+  }
+}
 
 export async function POST(request: NextRequest) {
   const progressId = Math.random().toString(36).substring(7)
+  const supabase = await createClient()
+  
+  // Check authentication
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   
   try {
-    const supabase = await createClient()
-    
-    // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
 
     const body = await request.json()
     const { postIds } = body
@@ -588,8 +629,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No valid posts found' }, { status: 404 })
     }
 
-    // Initialize progress tracking
-    progressStore.set(progressId, {
+    // Initialize progress tracking in database
+    await saveProgress(supabase, progressId, user.id, {
       status: 'starting',
       progress: 0,
       currentStep: 'Initializing LinkedIn Post Comments Scraper...',
@@ -598,13 +639,13 @@ export async function POST(request: NextRequest) {
     })
 
     // Start the scraping process asynchronously
-    processCommentsScraping(progressId, posts, user, userSettings.apify_api_key)
+    processCommentsScraping(progressId, posts, user, userSettings.apify_api_key, supabase)
 
     return NextResponse.json({ progressId })
 
   } catch (error) {
     console.error('Error starting comments scraping:', error)
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'error',
       progress: 0,
       currentStep: 'Failed to start',
@@ -624,26 +665,41 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Progress ID is required' }, { status: 400 })
   }
 
-  const progress = progressStore.get(progressId)
-  if (!progress) {
-    return NextResponse.json({ error: 'Progress not found' }, { status: 404 })
-  }
+  try {
+    const supabase = await createClient()
+    
+    // Check authentication
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-  // Clean up completed/error entries after they're retrieved
-  if (progress.status === 'completed' || progress.status === 'error') {
-    setTimeout(() => progressStore.delete(progressId), 30000)
-  }
+    const progress = await getProgress(supabase, progressId)
+    if (!progress) {
+      return NextResponse.json({ error: 'Progress not found' }, { status: 404 })
+    }
 
-  return NextResponse.json(progress)
+    // Clean up completed/error entries after they're retrieved
+    if (progress.status === 'completed' || progress.status === 'error') {
+      setTimeout(async () => {
+        await supabase.from('api_progress').delete().eq('id', progressId)
+      }, 30000)
+    }
+
+    return NextResponse.json(progress)
+  } catch (error) {
+    console.error('Error retrieving progress:', error)
+    return NextResponse.json({ error: 'Failed to retrieve progress' }, { status: 500 })
+  }
 }
 
 async function processCommentsScraping(
   progressId: string,
   posts: Database['public']['Tables']['posts']['Row'][],
   user: UserData,
-  apifyApiKey: string
+  apifyApiKey: string,
+  supabase: Awaited<ReturnType<typeof createClient>>
 ) {
-  const supabase = await createClient()
   
   try {
     const results: Array<{
@@ -658,7 +714,7 @@ async function processCommentsScraping(
     const allNewlyUpsertedProfileIds: string[] = [] // Track all profiles that need enrichment
     
     // Update progress: Starting scraper
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'scraping',
       progress: 10,
       currentStep: 'Initializing concurrent scraping jobs...',
@@ -671,7 +727,7 @@ async function processCommentsScraping(
     const postUrls = posts.map(p => p.post_url)
     
     // Update: Starting concurrent Apify operations
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'scraping',
       progress: 15,
       currentStep: `Starting concurrent scraping for ${posts.length} posts...`,
@@ -686,7 +742,7 @@ async function processCommentsScraping(
     console.log(`🐛 DEBUG: scrapeAllPostComments returned ${allCommentsData.length} total comments across all posts`)
     
     // Update: All concurrent scraping completed
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'processing',
       progress: 75,
       currentStep: `LinkedIn Post Comments Scraper completed! Found ${allCommentsData.length} comments • Saving to database...`,
@@ -717,7 +773,7 @@ async function processCommentsScraping(
       try {
         // Only update progress every 10 posts or on important posts to avoid spam
         if (i % 10 === 0 || i === posts.length - 1) {
-          progressStore.set(progressId, {
+          await saveProgress(supabase, progressId, user.id, {
             status: 'processing',
             progress: postProgress,
             currentStep: `Saving comments to database... (${i + 1}/${posts.length} posts processed)`,
@@ -911,7 +967,7 @@ async function processCommentsScraping(
         }
 
         // Update progress: Post completed
-        progressStore.set(progressId, {
+        await saveProgress(supabase, progressId, user.id, {
           status: 'processing',
           progress: postProgress + 3,
           currentStep: `Completed post ${i + 1} of ${posts.length} (${results[results.length - 1].commentsCount} comments found)`,
@@ -974,7 +1030,7 @@ async function processCommentsScraping(
                        successfulPosts > 0 ? 'completed' : 'error'
 
     // Set progress to 90% before enrichment
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'processing',
       progress: 90,
       currentStep: 'LinkedIn Post Comments Scraper completed • Starting LinkedIn Profile Enrichment...',
@@ -994,7 +1050,7 @@ async function processCommentsScraping(
     } catch (enrichError) {
       console.warn('Auto-enrichment failed:', enrichError)
       // Update progress to show enrichment failed but don't fail the whole operation
-      progressStore.set(progressId, {
+      await saveProgress(supabase, progressId, user.id, {
         status: 'processing',
         progress: 95,
         currentStep: 'Auto-enrichment failed, but scraping completed successfully',
@@ -1013,7 +1069,7 @@ async function processCommentsScraping(
     }
 
     // NOW mark as completed with final results
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: finalStatus,
       progress: 100,
       currentStep: 'All operations completed successfully',
@@ -1049,7 +1105,7 @@ async function processCommentsScraping(
 
   } catch (error) {
     console.error('Error in comments scraping:', error)
-    progressStore.set(progressId, {
+    await saveProgress(supabase, progressId, user.id, {
       status: 'error',
       progress: 0,
       currentStep: 'Error occurred',
