@@ -544,7 +544,8 @@ export default function PostsPage() {
         { id: 'saving', label: 'Save to database', status: 'pending' }
       ]
       
-      progressTracking.startProgress('Scraping Comments', initialSteps, postIds.length)
+      // FIXED: Don't pass totalItems to avoid misleading "0 of X items processed"
+      progressTracking.startProgress('Scraping Comments', initialSteps)
       progressTracking.updateStep('init', { id: 'init', label: 'Starting comments scraping...', status: 'running' })
 
       // Get auth token for Edge Functions
@@ -580,15 +581,25 @@ export default function PostsPage() {
 
       const result = await response.json()
       
+      // ENHANCED: Show detailed stats with new comments info
+      const newCommentsText = result.newComments > 0 ? ` (${result.newComments} new)` : ''
+      const statsMessage = `Found ${result.totalComments || 0} comments for ${result.processedPosts || postIds.length} posts${newCommentsText}`
+      
       progressTracking.updateStep('scraping', { 
         id: 'scraping', 
-        label: `Comments completed (${result.totalComments || 0} found)`, 
+        label: `Comments completed • ${statsMessage}`, 
         status: 'completed' 
       })
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
+      
+      // Show success message with stats
+      setSuccess(`Comments scraping completed! ${statsMessage}`)
+      
+      // Reload posts to show updated data
+      await loadPosts()
       
       // Clear selection after successful completion
       setSelectedPosts(new Set())
@@ -835,7 +846,8 @@ export default function PostsPage() {
         { id: 'saving', label: 'Save to database', status: 'pending' }
       ]
       
-      progressTracking.startProgress('Scraping Reactions', initialSteps, postIds.length)
+      // FIXED: Don't pass totalItems to avoid misleading "0 of X items processed"
+      progressTracking.startProgress('Scraping Reactions', initialSteps)
       progressTracking.updateStep('init', { id: 'init', label: 'Starting reactions scraping...', status: 'running' })
 
       // Get auth token for Edge Functions
@@ -871,15 +883,24 @@ export default function PostsPage() {
 
       const result = await response.json()
       
+      // ENHANCED: Show detailed stats with new reactions info
+      const statsMessage = `Found ${result.totalReactions || 0} reactions for ${result.processedPosts || postIds.length} posts`
+      
       progressTracking.updateStep('scraping', { 
         id: 'scraping', 
-        label: `Reactions completed (${result.totalReactions || 0} found)`, 
+        label: `Reactions completed • ${statsMessage}`, 
         status: 'completed' 
       })
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
+      
+      // Show success message with stats
+      setSuccess(`Reactions scraping completed! ${statsMessage}`)
+      
+      // Reload posts to show updated data
+      await loadPosts()
       
       // Clear selection after successful completion
       setSelectedPosts(new Set())
