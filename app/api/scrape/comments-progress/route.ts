@@ -679,13 +679,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Progress not found' }, { status: 404 })
     }
 
-    // Clean up completed/error entries after they're retrieved
+    // Clean up completed/error entries after they're retrieved (extended delay to ensure frontend gets results)
     if (progress.status === 'completed' || progress.status === 'error') {
       setTimeout(async () => {
         await supabase.from('api_progress').delete().eq('id', progressId)
-      }, 30000)
+      }, 120000) // 2 minutes instead of 30 seconds
     }
 
+    // Debug logging for progress response
+    console.log(`📊 Returning progress for ${progressId}:`, {
+      status: progress.status,
+      progress: progress.progress,
+      currentStep: progress.currentStep,
+      hasResult: !!progress.result,
+      resultKeys: progress.result ? Object.keys(progress.result) : []
+    })
+    
     return NextResponse.json(progress)
   } catch (error) {
     console.error('Error retrieving progress:', error)
