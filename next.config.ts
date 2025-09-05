@@ -6,6 +6,18 @@ const nextConfig: NextConfig = {
   
   // Disable source maps in production to prevent debugging tools
   productionBrowserSourceMaps: false,
+  
+  // Configure external image domains
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'media.licdn.com',
+        port: '',
+        pathname: '/**',
+      },
+    ],
+  },
 };
 
 export default nextConfig;
