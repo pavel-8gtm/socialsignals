@@ -413,115 +413,85 @@ export default function PostsPage() {
       ]
       
       progressTracking.startProgress('Scraping Reactions & Comments', initialSteps, totalPosts)
-      progressTracking.updateStep('init', { id: 'init', label: 'Starting scrapers...', status: 'running' })
+      progressTracking.updateStep('init', { id: 'init', label: 'Starting Edge Functions...', status: 'running' })
 
-      // Start both progress-enabled scrapers in parallel
+      // Get auth token for Edge Functions
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        throw new Error('No authentication session found')
+      }
+
+      progressTracking.updateStep('init', { id: 'init', label: 'Authentication verified', status: 'completed' })
+      progressTracking.updateProgress(10)
+
+      // Call Edge Functions directly (no polling needed!)
+      progressTracking.updateStep('reactions', { id: 'reactions', label: 'Scraping reactions...', status: 'running' })
+      progressTracking.updateStep('comments', { id: 'comments', label: 'Scraping comments...', status: 'running' })
+
       const [reactionsResponse, commentsResponse] = await Promise.allSettled([
-        fetch('/api/scrape/reactions-progress', {
+        fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-reactions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
           body: JSON.stringify({ postIds }),
         }),
-        fetch('/api/scrape/comments-progress', {
+        fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-comments`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
           body: JSON.stringify({ postIds }),
         })
       ])
 
-      progressTracking.updateStep('init', { id: 'init', label: 'Scrapers started', status: 'completed' })
-      progressTracking.updateProgress(20)
-
-      // Get progress IDs
-      let reactionsProgressId = null
-      let commentsProgressId = null
-
+      // Process reactions result
+      let reactionsSuccess = false
+      let reactionsData: { success?: boolean; totalReactions?: number; message?: string } | null = null
       if (reactionsResponse.status === 'fulfilled' && reactionsResponse.value.ok) {
-        const result = await reactionsResponse.value.json()
-        reactionsProgressId = result.progressId
-        progressTracking.updateStep('reactions', { id: 'reactions', label: 'Scraping reactions...', status: 'running' })
+        reactionsData = await reactionsResponse.value.json()
+        reactionsSuccess = reactionsData?.success || false
+        progressTracking.updateStep('reactions', { 
+          id: 'reactions', 
+          label: `Reactions completed (${reactionsData?.totalReactions || 0} found)`, 
+          status: 'completed' 
+        })
       } else {
-        progressTracking.updateStep('reactions', { id: 'reactions', label: 'Failed to start reactions scraper', status: 'error' })
+        const errorText = reactionsResponse.status === 'fulfilled' 
+          ? await reactionsResponse.value.text() 
+          : 'Network error'
+        progressTracking.updateStep('reactions', { 
+          id: 'reactions', 
+          label: 'Reactions failed', 
+          status: 'error', 
+          errorMessage: errorText 
+        })
       }
 
+      // Process comments result
+      let commentsSuccess = false
+      let commentsData: { success?: boolean; totalComments?: number; message?: string } | null = null
       if (commentsResponse.status === 'fulfilled' && commentsResponse.value.ok) {
-        const result = await commentsResponse.value.json()
-        commentsProgressId = result.progressId
-        progressTracking.updateStep('comments', { id: 'comments', label: 'Scraping comments...', status: 'running' })
+        commentsData = await commentsResponse.value.json()
+        commentsSuccess = commentsData?.success || false
+        progressTracking.updateStep('comments', { 
+          id: 'comments', 
+          label: `Comments completed (${commentsData?.totalComments || 0} found)`, 
+          status: 'completed' 
+        })
       } else {
-        progressTracking.updateStep('comments', { id: 'comments', label: 'Failed to start comments scraper', status: 'error' })
+        const errorText = commentsResponse.status === 'fulfilled' 
+          ? await commentsResponse.value.text() 
+          : 'Network error'
+        progressTracking.updateStep('comments', { 
+          id: 'comments', 
+          label: 'Comments failed', 
+          status: 'error', 
+          errorMessage: errorText 
+        })
       }
-
-      // Poll both progress endpoints simultaneously
-      const progressPromises = []
-      if (reactionsProgressId) {
-        progressPromises.push(
-          new Promise((resolve) => {
-            const pollReactions = setInterval(async () => {
-              try {
-                const response = await fetch(`/api/scrape/reactions-progress?progressId=${reactionsProgressId}`)
-                const data = await response.json()
-                
-                // Show detailed progress from the API
-                if (data.currentStep) {
-                  progressTracking.updateStep('reactions', { id: 'reactions', label: data.currentStep, status: 'running' })
-                }
-                
-                if (data.status === 'completed') {
-                  const enrichedText = data.enrichedProfiles ? ` • Auto-enriched ${data.enrichedProfiles} profiles` : ''
-                  progressTracking.updateStep('reactions', { id: 'reactions', label: `Reactions completed (${data.totalReactions || 0} found)${enrichedText}`, status: 'completed' })
-                  clearInterval(pollReactions)
-                  resolve(data)
-                } else if (data.status === 'error') {
-                  progressTracking.updateStep('reactions', { id: 'reactions', label: 'Reactions failed', status: 'error', errorMessage: data.error })
-                  clearInterval(pollReactions)
-                  resolve(data)
-                }
-              } catch (error) {
-                progressTracking.updateStep('reactions', { id: 'reactions', label: 'Reactions failed', status: 'error', errorMessage: 'Connection error' })
-                clearInterval(pollReactions)
-                resolve({ status: 'error', error: 'Connection error' })
-              }
-            }, 1000)
-          })
-        )
-      }
-
-      if (commentsProgressId) {
-        progressPromises.push(
-          new Promise((resolve) => {
-            const pollComments = setInterval(async () => {
-              try {
-                const response = await fetch(`/api/scrape/comments-progress?progressId=${commentsProgressId}`)
-                const data = await response.json()
-                
-                // Show detailed progress from the API
-                if (data.currentStep) {
-                  progressTracking.updateStep('comments', { id: 'comments', label: data.currentStep, status: 'running' })
-                }
-                
-                if (data.status === 'completed') {
-                  const enrichedText = data.enrichedProfiles ? ` • Auto-enriched ${data.enrichedProfiles} profiles` : ''
-                  progressTracking.updateStep('comments', { id: 'comments', label: `Comments completed (${data.totalComments || 0} found)${enrichedText}`, status: 'completed' })
-                  clearInterval(pollComments)
-                  resolve(data)
-                } else if (data.status === 'error') {
-                  progressTracking.updateStep('comments', { id: 'comments', label: 'Comments failed', status: 'error', errorMessage: data.error })
-                  clearInterval(pollComments)
-                  resolve(data)
-                }
-              } catch (error) {
-                progressTracking.updateStep('comments', { id: 'comments', label: 'Comments failed', status: 'error', errorMessage: 'Connection error' })
-                clearInterval(pollComments)
-                resolve({ status: 'error', error: 'Connection error' })
-              }
-            }, 1000)
-          })
-        )
-      }
-
-      // Wait for both to complete
-      const results = await Promise.all(progressPromises)
       
       progressTracking.updateStep('saving', { id: 'saving', label: 'Finalizing...', status: 'running' })
       progressTracking.updateProgress(90)
@@ -529,46 +499,20 @@ export default function PostsPage() {
       // Clear engagement flags for successfully scraped posts
       await clearEngagementFlagsForPosts(postIds)
 
-      // Determine success/failure
-      const reactionsResult = results.find(r => r && typeof r === 'object' && 'totalReactions' in r) as { status?: string, totalReactions?: number } | undefined
-      const commentsResult = results.find(r => r && typeof r === 'object' && 'totalComments' in r) as { status?: string, totalComments?: number } | undefined
-      
-      const reactionsSuccess = reactionsResult?.status === 'completed'
-      const commentsSuccess = commentsResult?.status === 'completed'
-      
-      // Log for debugging
-      console.log('Scraping results:', { 
-        reactionsResult: reactionsResult ? { status: reactionsResult.status, totalReactions: reactionsResult.totalReactions } : null,
-        commentsResult: commentsResult ? { status: commentsResult.status, totalComments: commentsResult.totalComments } : null,
-        reactionsSuccess, 
-        commentsSuccess 
-      })
-
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
 
       // Set appropriate success/error message
       if (reactionsSuccess && commentsSuccess) {
-        setSuccess(`Successfully scraped both reactions (${reactionsResult?.totalReactions || 0}) and comments (${commentsResult?.totalComments || 0}) for ${selectedPosts.size} posts`)
+        setSuccess(`Successfully scraped both reactions (${reactionsData?.totalReactions || 0}) and comments (${commentsData?.totalComments || 0}) for ${selectedPosts.size} posts`)
       } else if (reactionsSuccess || commentsSuccess) {
         const scraped = reactionsSuccess ? 'reactions' : 'comments'
         const failed = reactionsSuccess ? 'comments' : 'reactions'
-        const scrapedCount = reactionsSuccess ? reactionsResult?.totalReactions : commentsResult?.totalComments
+        const scrapedCount = reactionsSuccess ? reactionsData?.totalReactions : commentsData?.totalComments
         setSuccess(`Successfully scraped ${scraped} (${scrapedCount || 0} found) for ${selectedPosts.size} posts. ${failed} scraping had issues.`)
       } else {
-        // Check if we have any results at all
-        const hasReactionsData = reactionsResult && typeof reactionsResult === 'object'
-        const hasCommentsData = commentsResult && typeof commentsResult === 'object'
-        
-        if (hasReactionsData || hasCommentsData) {
-          // We have data but status is not 'completed' - likely partial success
-          const reactionsCount = reactionsResult?.totalReactions || 0
-          const commentsCount = commentsResult?.totalComments || 0
-          setSuccess(`Engagement scraping completed with some issues. Found ${reactionsCount} reactions and ${commentsCount} comments for ${selectedPosts.size} posts. Some posts may have failed - check individual post status.`)
-        } else {
-          setError(`Failed to scrape engagements for ${selectedPosts.size} posts`)
-        }
+        setError(`Failed to scrape engagements for ${selectedPosts.size} posts. Check the logs for details.`)
       }
       
       setSelectedPosts(new Set()) // Clear selection
