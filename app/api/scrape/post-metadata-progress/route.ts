@@ -303,7 +303,7 @@ async function processMetadataScraping(
       
       // Collect results and errors
       batchResults.forEach((result, batchIndex) => {
-        const globalIndex = i + batchIndex
+        // const globalIndex = i + batchIndex
         
         if (result.status === 'fulfilled') {
           results.push(result.value)

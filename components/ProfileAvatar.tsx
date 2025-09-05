@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import Image from 'next/image'
 
 interface ProfilePictures {
   small?: string
@@ -50,9 +51,11 @@ export function ProfileAvatar({
   
   if (imageUrl) {
     return (
-      <img
+      <Image
         src={imageUrl}
         alt={`${name}'s profile picture`}
+        width={size === 'sm' ? 32 : size === 'md' ? 40 : 48}
+        height={size === 'sm' ? 32 : size === 'md' ? 40 : 48}
         className={`${sizeClasses[size]} rounded-full object-cover flex-shrink-0 ${className}`}
         onError={() => setImageError(true)}
       />

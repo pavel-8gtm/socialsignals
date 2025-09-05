@@ -220,7 +220,7 @@ async function processProfileScraping(
     })
 
     // Transform posts for database insertion
-    const postsToInsert: Post[] = profilePosts.map((postData, index) => {
+    const postsToInsert: Post[] = profilePosts.map((postData) => {
 
       // Extract post ID from URL
       const postIdMatch = postData.url.match(/activity-(\d+)/)

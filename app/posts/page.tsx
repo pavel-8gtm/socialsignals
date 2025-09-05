@@ -69,7 +69,8 @@ export default function PostsPage() {
   const progressTracking = useProgressTracking()
   const [confirmAction, setConfirmAction] = useState<'metadata' | 'reactions' | 'comments' | 'delete' | null>(null)
   
-  // Helper function to poll progress
+  // Helper function to poll progress (currently unused)
+  /*
   const pollProgress = async (progressId: string, endpoint: string, skipLoadPosts = false) => {
     const pollInterval = setInterval(async () => {
       try {
@@ -179,6 +180,7 @@ export default function PostsPage() {
     
     return pollInterval
   }
+  */
   const [previewPost, setPreviewPost] = useState<Post | null>(null)
   const [showPreviewDialog, setShowPreviewDialog] = useState(false)
   const [showEngagementDialog, setShowEngagementDialog] = useState(false)
@@ -238,7 +240,7 @@ export default function PostsPage() {
   }
 
   async function loadUser() {
-    const { data: { user }, error } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     setUser(user)
     return user
   }
@@ -438,7 +440,7 @@ export default function PostsPage() {
     
     try {
       const postIds = Array.from(selectedPosts)
-      const totalPosts = selectedPosts.size
+      // const totalPosts = selectedPosts.size
 
       // Start progress tracking
       const initialSteps: ProgressStep[] = [
@@ -555,7 +557,7 @@ export default function PostsPage() {
       // Extract enrichment info from Edge Function responses
       let totalEnrichedProfiles = 0
       let totalNewProfiles = 0
-      let enrichmentErrors: string[] = []
+      const enrichmentErrors: string[] = []
       
       if (reactionsSuccess && reactionsData?.autoEnrichment) {
         totalEnrichedProfiles += reactionsData.autoEnrichment.profilesEnriched || 0
@@ -1238,7 +1240,7 @@ export default function PostsPage() {
         // Automatically fetch metadata for the newly added posts
         await fetchMetadataForPosts(validPosts.map(p => p.postUrl))
       }
-    } catch (error) {
+    } catch {
       setError('Failed to add posts')
     } finally {
       setIsSaving(false)
@@ -2576,7 +2578,7 @@ export default function PostsPage() {
                     <div key={profile.id as string || index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
                       <ProfileAvatar
                         name={((profile.profiles as Record<string, unknown>)?.name as string) || 'Unknown'}
-                        profilePictures={(profile.profiles as Record<string, unknown>)?.profile_pictures as any}
+                        profilePictures={(profile.profiles as Record<string, unknown>)?.profile_pictures as Record<string, string> | undefined}
                         profilePictureUrl={(profile.profiles as Record<string, unknown>)?.profile_picture_url as string}
                         size="md"
                       />

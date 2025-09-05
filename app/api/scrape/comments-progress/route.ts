@@ -173,7 +173,7 @@ async function upsertCommentProfilesWithDualIdentifiers(supabase: SupabaseClient
     
     if (existingProfile) {
       // Check if this existing profile needs enrichment (missing first_name)
-      const needsEnrichment = !existingProfile.first_name || existingProfile.first_name.trim() === ''
+      // const needsEnrichment = !existingProfile.first_name || existingProfile.first_name.trim() === ''
       
       // PRESERVE ORIGINAL URN - don't overwrite if it exists and is different
       // This prevents losing track of comments linked to different URN formats

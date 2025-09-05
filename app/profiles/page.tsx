@@ -1840,7 +1840,7 @@ export default function ProfilesPage() {
                               ? `${profile.first_name} ${profile.last_name}`
                               : profile.name || 'Unknown'
                             }
-                            profilePictures={profile.profile_pictures as any}
+                            profilePictures={profile.profile_pictures as Record<string, string> | undefined}
                             profilePictureUrl={profile.profile_picture_url}
                             size="md"
                           />
