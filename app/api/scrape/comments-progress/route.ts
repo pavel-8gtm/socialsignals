@@ -254,10 +254,8 @@ async function upsertCommentProfilesWithDualIdentifiers(supabase: SupabaseClient
         }
         
         results.push(updatedData)
-        // If profile needs enrichment, add to newly upserted list
-        if (needsEnrichment) {
-          newlyUpsertedIds.push(updatedData.id)
-        }
+        // DON'T add existing profiles to newlyUpsertedIds - they're not new!
+        // Only truly new profiles should be in the newly upserted list
       } else {
         console.error('Error updating existing profile:', error)
       }
@@ -316,7 +314,7 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
   // Find profiles that need enrichment among the newly discovered ones
   const { data: profilesToEnrich, error: profilesError } = await supabase
     .from('profiles')
-    .select('id, profile_url, first_name, enriched_at')
+    .select('id, profile_url, first_name, last_enriched_at')
     .in('id', newlyUpsertedProfileIds) // Only check the newly discovered profiles
     .or('first_name.is.null,first_name.eq.')
     .not('profile_url', 'ilike', '%/company/%') // Exclude company profiles
@@ -450,7 +448,6 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
           public_identifier: basicInfo.public_identifier || null,
           primary_identifier: basicInfo.urn || null,
           secondary_identifier: basicInfo.public_identifier || enrichedProfile.profileUrl || null,
-          enriched_at: new Date().toISOString(),
           last_enriched_at: new Date().toISOString()
         }
         

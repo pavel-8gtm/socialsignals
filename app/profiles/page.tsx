@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Calendar } from '@/components/ui/calendar'
 import { ChevronDown, CalendarIcon, X, Send } from 'lucide-react'
 import { format, startOfDay, endOfDay, subDays, subMonths, isAfter, isBefore } from 'date-fns'
+import { ProfileAvatar } from '@/components/ProfileAvatar'
 import type { Database } from '@/lib/types/database.types'
 
 type EngagementTimelineItem = {
@@ -567,7 +568,6 @@ export default function ProfilesPage() {
             public_identifier,
             primary_identifier,
             secondary_identifier,
-            enriched_at,
             last_enriched_at
             )
           )
@@ -615,7 +615,6 @@ export default function ProfilesPage() {
               public_identifier,
               primary_identifier,
               secondary_identifier,
-              enriched_at,
               last_enriched_at
             )
           )
@@ -940,21 +939,56 @@ export default function ProfilesPage() {
         throw new Error('No authentication session found')
       }
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ profileIds }),
-      })
+      // Try using Supabase client method first
+      let result
+      try {
+        console.log('🔧 Trying Supabase client method...')
+        const { data, error } = await supabase.functions.invoke('enrich-profiles', {
+          body: { profileIds }
+        })
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(errorText || 'Failed to start enrichment')
+        if (error) {
+          console.error('🔧 Supabase client error:', error)
+          throw error
+        }
+
+        console.log('🔧 Supabase client success:', data)
+        result = data
+      } catch (clientError) {
+        console.error('🔧 Supabase client failed, trying direct fetch...', clientError)
+        
+        // Fallback to direct fetch
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+        if (!supabaseUrl) {
+          throw new Error('Supabase URL not configured')
+        }
+
+        console.log('🔧 Calling Edge Function directly:', `${supabaseUrl}/functions/v1/enrich-profiles`)
+        console.log('🔧 Profile IDs:', profileIds)
+        console.log('🔧 Session token:', session.access_token ? 'Present' : 'Missing')
+
+        const response = await fetch(`${supabaseUrl}/functions/v1/enrich-profiles`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          },
+          body: JSON.stringify({ profileIds }),
+        })
+
+        console.log('🔧 Response status:', response.status)
+        console.log('🔧 Response ok:', response.ok)
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.error('🔧 Error response:', errorText)
+          throw new Error(`HTTP ${response.status}: ${errorText || 'Failed to start enrichment'}`)
+        }
+
+        result = await response.json()
+        console.log('🔧 Result:', result)
       }
-
-      const result = await response.json()
       
       if (result.success) {
         setSuccess(`Profile enrichment completed! Updated ${result.enrichedProfiles} profiles.`)
@@ -1801,28 +1835,15 @@ export default function ProfilesPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          {/* Profile Picture */}
-                          {(() => {
-                            const profilePictureUrl = profile.profile_picture_url || 
-                              ((profile.profile_pictures as Record<string, unknown>)?.small as string);
-                            
-                            return profilePictureUrl ? (
-                              <img
-                                src={profilePictureUrl}
-                                alt={`${profile.first_name || profile.name || 'Unknown'}'s profile`}
-                                className="w-10 h-10 rounded-full object-cover flex-shrink-0"
-                                onError={(e) => {
-                                  e.currentTarget.style.display = 'none'
-                                }}
-                              />
-                            ) : (
-                              <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                              <svg className="w-6 h-6 text-gray-400" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M24 20.993V24H0v-2.996A14.977 14.977 0 0112.004 15c4.904 0 9.26 2.354 11.996 5.993zM16.002 8.999a4 4 0 11-8 0 4 4 0 018 0z" />
-                              </svg>
-                            </div>
-                            );
-                          })()}
+                          <ProfileAvatar
+                            name={profile.first_name && profile.last_name 
+                              ? `${profile.first_name} ${profile.last_name}`
+                              : profile.name || 'Unknown'
+                            }
+                            profilePictures={profile.profile_pictures as any}
+                            profilePictureUrl={profile.profile_picture_url}
+                            size="md"
+                          />
                           
                           <div className="flex-1 min-w-0">
                             {/* Name and LinkedIn Link */}

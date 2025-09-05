@@ -373,7 +373,6 @@ async function processEnrichment(
           public_identifier: basicInfo.public_identifier || null,
           primary_identifier: basicInfo.urn || null,
           secondary_identifier: basicInfo.public_identifier || enrichedProfile.profileUrl || null,
-          enriched_at: new Date().toISOString(),
           last_enriched_at: new Date().toISOString()
         }
 

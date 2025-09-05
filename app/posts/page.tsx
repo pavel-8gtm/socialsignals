@@ -18,6 +18,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ProgressOverlay, useProgressTracking, type ProgressStep } from '@/components/ui/progress-overlay'
+import { ProfileAvatar } from '@/components/ProfileAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Calendar } from '@/components/ui/calendar'
 import { ChevronDownIcon, CalendarIcon, Star } from 'lucide-react'
@@ -105,6 +106,27 @@ export default function PostsPage() {
             status: data.status === 'saving' ? 'running' : data.progress > 90 ? 'completed' : 'pending'
           }
         ]
+
+        // 🌟 NEW: Add auto-enrichment step when enrichment is detected
+        const isEnrichmentStep = data.currentStep && (
+          data.currentStep.includes('enrichment') || 
+          data.currentStep.includes('Enrichment') ||
+          data.currentStep.includes('profiles needing enrichment') ||
+          data.currentStep.includes('Auto-enriched')
+        )
+        
+        if (isEnrichmentStep || data.progress >= 91) {
+          // Insert enrichment step before the last step (saving/completing)
+          const enrichmentStep: ProgressStep = {
+            id: 'enrichment',
+            label: isEnrichmentStep && data.progress < 100 ? 'Auto-enriching profiles...' : 'Auto-enrich profiles',
+            status: isEnrichmentStep && data.progress < 100 ? 'running' : data.progress >= 98 ? 'completed' : 'pending',
+            details: isEnrichmentStep ? data.currentStep : undefined
+          }
+          
+          // Insert enrichment step before the last step
+          steps.splice(-1, 0, enrichmentStep)
+        }
         
         if (data.status === 'error') {
           steps.forEach(step => {
@@ -185,9 +207,12 @@ export default function PostsPage() {
   })
 
   useEffect(() => {
-    loadUser()
-    loadPosts()
-    loadMonitoredProfiles()
+    async function initializeData() {
+      await loadUser()
+      await loadPosts()
+      await loadMonitoredProfiles()
+    }
+    initializeData()
   }, [])
 
   async function loadMonitoredProfiles() {
@@ -213,15 +238,25 @@ export default function PostsPage() {
   }
 
   async function loadUser() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user }, error } = await supabase.auth.getUser()
     setUser(user)
+    return user
   }
 
   async function loadPosts(detectNewPosts = false) {
     setIsLoading(true)
     try {
+      // Get fresh user data to ensure we have the latest authentication state
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      
+      if (!currentUser?.id) {
+        setIsLoading(false)
+        return 0
+      }
+
       const previousPostIds = detectNewPosts ? new Set(posts.map(p => p.id)) : new Set()
       
+      // Query posts for the current user
       const { data, error } = await supabase
         .from('posts')
         .select(`
@@ -229,10 +264,11 @@ export default function PostsPage() {
           reactions_count:reactions(count),
           comments_count:comments(count)
         `)
+        .eq('user_id', currentUser.id)
         .order('created_at', { ascending: false })
 
       if (error) {
-        setError(error.message)
+        setError(`Failed to load posts: ${error.message}`)
         return 0
       } else {
         // Transform the data to include counts
@@ -409,10 +445,11 @@ export default function PostsPage() {
         { id: 'init', label: 'Initializing...', status: 'pending' },
         { id: 'reactions', label: 'Scrape reactions', status: 'pending' },
         { id: 'comments', label: 'Scrape comments', status: 'pending' },
+        { id: 'enrichment', label: 'Auto-enrich profiles', status: 'pending' },
         { id: 'saving', label: 'Finalizing results', status: 'pending' }
       ]
       
-      progressTracking.startProgress('Scraping Reactions & Comments', initialSteps, totalPosts)
+      progressTracking.startProgress('Scraping Reactions & Comments', initialSteps) // Don't show misleading item count
       progressTracking.updateStep('init', { id: 'init', label: 'Starting Edge Functions...', status: 'running' })
 
       // Get auth token for Edge Functions
@@ -424,34 +461,34 @@ export default function PostsPage() {
       progressTracking.updateStep('init', { id: 'init', label: 'Authentication verified', status: 'completed' })
       progressTracking.updateProgress(10)
 
-      // Call Edge Functions directly (no polling needed!)
+      // 🔧 FIXED: Run Edge Functions sequentially to avoid database conflicts
       progressTracking.updateStep('reactions', { id: 'reactions', label: 'Scraping reactions...', status: 'running' })
-      progressTracking.updateStep('comments', { id: 'comments', label: 'Scraping comments...', status: 'running' })
 
-      const [reactionsResponse, commentsResponse] = await Promise.allSettled([
-        fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-reactions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ postIds }),
-        }),
-        fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-comments`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ postIds }),
-        })
-      ])
+      // First: Scrape reactions
+      const reactionsResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-reactions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ postIds }),
+      })
 
-      // Process reactions result
+      // Process reactions result first
       let reactionsSuccess = false
-      let reactionsData: { success?: boolean; totalReactions?: number; message?: string } | null = null
-      if (reactionsResponse.status === 'fulfilled' && reactionsResponse.value.ok) {
-        reactionsData = await reactionsResponse.value.json()
+      let reactionsData: { 
+        success?: boolean; 
+        totalReactions?: number; 
+        message?: string;
+        autoEnrichment?: {
+          profilesEnriched: number;
+          newProfilesFound: number;
+          enrichmentErrors: string[];
+        }
+      } | null = null
+
+      if (reactionsResponse.ok) {
+        reactionsData = await reactionsResponse.json()
         reactionsSuccess = reactionsData?.success || false
         progressTracking.updateStep('reactions', { 
           id: 'reactions', 
@@ -459,9 +496,7 @@ export default function PostsPage() {
           status: 'completed' 
         })
       } else {
-        const errorText = reactionsResponse.status === 'fulfilled' 
-          ? await reactionsResponse.value.text() 
-          : 'Network error'
+        const errorText = await reactionsResponse.text()
         progressTracking.updateStep('reactions', { 
           id: 'reactions', 
           label: 'Reactions failed', 
@@ -470,11 +505,33 @@ export default function PostsPage() {
         })
       }
 
+      // Second: Scrape comments (after reactions complete)
+      progressTracking.updateStep('comments', { id: 'comments', label: 'Scraping comments...', status: 'running' })
+
+      const commentsResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ postIds }),
+      })
+
       // Process comments result
       let commentsSuccess = false
-      let commentsData: { success?: boolean; totalComments?: number; message?: string } | null = null
-      if (commentsResponse.status === 'fulfilled' && commentsResponse.value.ok) {
-        commentsData = await commentsResponse.value.json()
+      let commentsData: { 
+        success?: boolean; 
+        totalComments?: number; 
+        message?: string;
+        autoEnrichment?: {
+          profilesEnriched: number;
+          newProfilesFound: number;
+          enrichmentErrors: string[];
+        }
+      } | null = null
+
+      if (commentsResponse.ok) {
+        commentsData = await commentsResponse.json()
         commentsSuccess = commentsData?.success || false
         progressTracking.updateStep('comments', { 
           id: 'comments', 
@@ -482,9 +539,7 @@ export default function PostsPage() {
           status: 'completed' 
         })
       } else {
-        const errorText = commentsResponse.status === 'fulfilled' 
-          ? await commentsResponse.value.text() 
-          : 'Network error'
+        const errorText = await commentsResponse.text()
         progressTracking.updateStep('comments', { 
           id: 'comments', 
           label: 'Comments failed', 
@@ -492,6 +547,50 @@ export default function PostsPage() {
           errorMessage: errorText 
         })
       }
+      
+      // 🌟 NEW: Show auto-enrichment progress based on Edge Function results
+      progressTracking.updateStep('enrichment', { id: 'enrichment', label: 'Processing auto-enrichment results...', status: 'running' })
+      progressTracking.updateProgress(80)
+      
+      // Extract enrichment info from Edge Function responses
+      let totalEnrichedProfiles = 0
+      let totalNewProfiles = 0
+      let enrichmentErrors: string[] = []
+      
+      if (reactionsSuccess && reactionsData?.autoEnrichment) {
+        totalEnrichedProfiles += reactionsData.autoEnrichment.profilesEnriched || 0
+        totalNewProfiles += reactionsData.autoEnrichment.newProfilesFound || 0
+        if (reactionsData.autoEnrichment.enrichmentErrors?.length > 0) {
+          enrichmentErrors.push(...reactionsData.autoEnrichment.enrichmentErrors)
+        }
+      }
+      
+      if (commentsSuccess && commentsData?.autoEnrichment) {
+        totalEnrichedProfiles += commentsData.autoEnrichment.profilesEnriched || 0
+        totalNewProfiles += commentsData.autoEnrichment.newProfilesFound || 0
+        if (commentsData.autoEnrichment.enrichmentErrors?.length > 0) {
+          enrichmentErrors.push(...commentsData.autoEnrichment.enrichmentErrors)
+        }
+      }
+      
+      // Update enrichment step with results
+      let enrichmentLabel = 'Auto-enrichment completed'
+      if (totalNewProfiles > 0) {
+        if (totalEnrichedProfiles > 0) {
+          enrichmentLabel = `Auto-enriched ${totalEnrichedProfiles} of ${totalNewProfiles} new profiles`
+        } else {
+          enrichmentLabel = `Found ${totalNewProfiles} new profiles (no enrichment needed)`
+        }
+      } else {
+        enrichmentLabel = 'No new profiles found'
+      }
+      
+      progressTracking.updateStep('enrichment', { 
+        id: 'enrichment', 
+        label: enrichmentLabel, 
+        status: enrichmentErrors.length > 0 ? 'error' : 'completed',
+        errorMessage: enrichmentErrors.length > 0 ? enrichmentErrors.join('; ') : undefined
+      })
       
       progressTracking.updateStep('saving', { id: 'saving', label: 'Finalizing...', status: 'running' })
       progressTracking.updateProgress(90)
@@ -541,7 +640,8 @@ export default function PostsPage() {
         { id: 'init', label: 'Initializing...', status: 'pending' },
         { id: 'scraping', label: 'Scrape comments', status: 'pending' },
         { id: 'processing', label: 'Process results', status: 'pending' },
-        { id: 'saving', label: 'Save to database', status: 'pending' }
+        { id: 'saving', label: 'Save to database', status: 'pending' },
+        { id: 'enrichment', label: 'Enrich profiles', status: 'pending' }
       ]
       
       // FIXED: Don't pass totalItems to avoid misleading "0 of X items processed"
@@ -592,11 +692,67 @@ export default function PostsPage() {
       })
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
+
+      // 🆕 NEW: Trigger profile enrichment if profiles were found
+      let enrichmentMessage = ''
+      if (result.profiles?.profileIds?.length > 0) {
+        progressTracking.updateStep('enrichment', { 
+          id: 'enrichment', 
+          label: `Enriching ${result.profiles.totalProfilesProcessed} profiles...`, 
+          status: 'running' 
+        })
+
+        try {
+          const enrichResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles-batch`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ profileIds: result.profiles.profileIds }),
+          })
+
+          if (enrichResponse.ok) {
+            const enrichResult = await enrichResponse.json()
+            enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} profiles`
+            progressTracking.updateStep('enrichment', { 
+              id: 'enrichment', 
+              label: `Enriched ${enrichResult.profilesEnriched || 0} profiles`, 
+              status: 'completed' 
+            })
+          } else {
+            const errorText = await enrichResponse.text()
+            console.warn('Profile enrichment failed:', errorText)
+            progressTracking.updateStep('enrichment', { 
+              id: 'enrichment', 
+              label: 'Enrichment failed (profiles saved without enrichment)', 
+              status: 'warning' 
+            })
+            enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
+          }
+        } catch (enrichError) {
+          console.warn('Profile enrichment error:', enrichError)
+          progressTracking.updateStep('enrichment', { 
+            id: 'enrichment', 
+            label: 'Enrichment failed (profiles saved without enrichment)', 
+            status: 'warning' 
+          })
+          enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
+        }
+      } else {
+        progressTracking.updateStep('enrichment', { 
+          id: 'enrichment', 
+          label: 'No new profiles to enrich', 
+          status: 'completed' 
+        })
+        enrichmentMessage = ' • No new profiles found'
+      }
+
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
       
       // Show success message with stats
-      setSuccess(`Comments scraping completed! ${statsMessage}`)
+      setSuccess(`Comments scraping completed! ${statsMessage}${enrichmentMessage}`)
       
       // Reload posts to show updated data
       await loadPosts()
@@ -626,7 +782,9 @@ export default function PostsPage() {
               id,
               name,
               headline,
-              profile_url
+              profile_url,
+              profile_pictures,
+              profile_picture_url
             )
           `)
           .eq('post_id', post.id)
@@ -656,7 +814,9 @@ export default function PostsPage() {
               id,
               name,
               headline,
-              profile_url
+              profile_url,
+              profile_pictures,
+              profile_picture_url
             )
           `)
           .eq('post_id', post.id)
@@ -838,15 +998,41 @@ export default function PostsPage() {
         status: 'completed' 
       })
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
+      progressTracking.updateStep('saving', { id: 'saving', label: 'Updating UI...', status: 'running' })
+      
+      // Wait a moment for database changes to propagate
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Force reload posts to show updated metadata (clear any caching)
+      await loadPosts()
+      
+      // Force a second reload to ensure we get the latest data
+      setTimeout(async () => {
+        await loadPosts()
+      }, 500)
+      
+      // Also force a third reload after a longer delay to ensure metadata updates are visible
+      setTimeout(async () => {
+        await loadPosts()
+      }, 2000)
+      
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
       
-      // Reload posts to show updated metadata
-      await loadPosts()
+      // Update success message to show completion
+      const validCount = postUrls.length
+      let completionMessage = `Successfully added ${validCount} post${validCount !== 1 ? 's' : ''}`
+      if (result.processedPosts) {
+        completionMessage += ` and fetched metadata for ${result.processedPosts} post${result.processedPosts !== 1 ? 's' : ''}`
+      }
+      setSuccess(completionMessage)
       
     } catch (error) {
       console.error('Error fetching metadata for new posts:', error)
+      // Update success message to show partial completion
+      const validCount = postUrls.length
+      setSuccess(`Successfully added ${validCount} post${validCount !== 1 ? 's' : ''}, but failed to fetch metadata`)
       setError('Failed to fetch metadata for newly added posts')
     }
   }
@@ -863,7 +1049,8 @@ export default function PostsPage() {
         { id: 'init', label: 'Initializing...', status: 'pending' },
         { id: 'scraping', label: 'Scrape reactions', status: 'pending' },
         { id: 'processing', label: 'Process results', status: 'pending' },
-        { id: 'saving', label: 'Save to database', status: 'pending' }
+        { id: 'saving', label: 'Save to database', status: 'pending' },
+        { id: 'enrichment', label: 'Enrich profiles', status: 'pending' }
       ]
       
       // FIXED: Don't pass totalItems to avoid misleading "0 of X items processed"
@@ -913,11 +1100,67 @@ export default function PostsPage() {
       })
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
+
+      // 🆕 NEW: Trigger profile enrichment if profiles were found
+      let enrichmentMessage = ''
+      if (result.profiles?.profileIds?.length > 0) {
+        progressTracking.updateStep('enrichment', { 
+          id: 'enrichment', 
+          label: `Enriching ${result.profiles.totalProfilesProcessed} profiles...`, 
+          status: 'running' 
+        })
+
+        try {
+          const enrichResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles-batch`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ profileIds: result.profiles.profileIds }),
+          })
+
+          if (enrichResponse.ok) {
+            const enrichResult = await enrichResponse.json()
+            enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} profiles`
+            progressTracking.updateStep('enrichment', { 
+              id: 'enrichment', 
+              label: `Enriched ${enrichResult.profilesEnriched || 0} profiles`, 
+              status: 'completed' 
+            })
+          } else {
+            const errorText = await enrichResponse.text()
+            console.warn('Profile enrichment failed:', errorText)
+            progressTracking.updateStep('enrichment', { 
+              id: 'enrichment', 
+              label: 'Enrichment failed (profiles saved without enrichment)', 
+              status: 'warning' 
+            })
+            enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
+          }
+        } catch (enrichError) {
+          console.warn('Profile enrichment error:', enrichError)
+          progressTracking.updateStep('enrichment', { 
+            id: 'enrichment', 
+            label: 'Enrichment failed (profiles saved without enrichment)', 
+            status: 'warning' 
+          })
+          enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
+        }
+      } else {
+        progressTracking.updateStep('enrichment', { 
+          id: 'enrichment', 
+          label: 'No new profiles to enrich', 
+          status: 'completed' 
+        })
+        enrichmentMessage = ' • No new profiles found'
+      }
+
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
       
       // Show success message with stats
-      setSuccess(`Reactions scraping completed! ${statsMessage}`)
+      setSuccess(`Reactions scraping completed! ${statsMessage}${enrichmentMessage}`)
       
       // Reload posts to show updated data
       await loadPosts()
@@ -1059,9 +1302,19 @@ export default function PostsPage() {
       const profileText = profilesToScrape.length === 1 ? 'Profile' : `${profilesToScrape.length} Profiles`
       progressTracking.startProgress(`Scraping Posts from LinkedIn ${profileText}`, initialSteps)
 
+      // Mark initialization as completed
+      progressTracking.updateStep('init', {
+        id: 'init',
+        label: 'Initializing...',
+        status: 'completed'
+      })
+
       // Process profiles sequentially
-      // let totalPostsScraped = 0
       let successfulProfiles = 0
+      let totalNewPosts = 0
+      let totalUpdatedPosts = 0
+      let totalPostsWithEngagementUpdates = 0
+      const profileResults: string[] = []
       
       for (let i = 0; i < profilesToScrape.length; i++) {
         const profileUrl = profilesToScrape[i]
@@ -1098,31 +1351,71 @@ export default function PostsPage() {
 
           if (response.ok) {
             const result = await response.json()
-            successfulProfiles++
-            console.log(`✅ Successfully scraped profile ${profileUrl}:`, result.message)
+            if (result.success) {
+              successfulProfiles++
+              totalNewPosts += result.newPosts || 0
+              totalUpdatedPosts += result.updatedPosts || 0
+              totalPostsWithEngagementUpdates += result.postsWithEngagementUpdates || 0
+              
+              profileResults.push(`${profileName}: ${result.newPosts || 0} new, ${result.updatedPosts || 0} updated`)
+              console.log(`✅ Successfully scraped profile ${profileUrl}:`, result)
+            } else {
+              console.error(`Failed to scrape profile ${profileUrl}:`, result.error || 'Unknown error')
+              profileResults.push(`${profileName}: Failed - ${result.error || 'Unknown error'}`)
+            }
           } else {
             const errorText = await response.text()
             console.error(`Failed to scrape profile ${profileUrl}:`, errorText)
+            profileResults.push(`${profileName}: Failed - ${errorText}`)
           }
         } catch (profileError) {
           console.error(`Error scraping profile ${profileUrl}:`, profileError)
+          profileResults.push(`${profileName}: Error - ${profileError instanceof Error ? profileError.message : 'Unknown error'}`)
         }
       }
 
-      // Update final progress
-      if (successfulProfiles === profilesToScrape.length) {
+      // Mark scraping as completed
+      progressTracking.updateStep('scraping', {
+        id: 'scraping',
+        label: `Scraping completed (${successfulProfiles}/${profilesToScrape.length} profiles)`,
+        status: successfulProfiles > 0 ? 'completed' : 'error'
+      })
+
+      // Mark processing as completed
+      progressTracking.updateStep('processing', {
+        id: 'processing',
+        label: 'Process results',
+        status: 'completed'
+      })
+
+      // Update final progress with detailed stats
+      if (successfulProfiles > 0) {
         progressTracking.updateStep('saving', {
           id: 'saving',
-          label: `Successfully scraped ${successfulProfiles} profile${successfulProfiles === 1 ? '' : 's'}`,
+          label: `Successfully processed ${successfulProfiles} profile${successfulProfiles === 1 ? '' : 's'}`,
           status: 'completed'
         })
+
+        // Show detailed success message
+        const statsMessage = [
+          `Successfully scraped ${successfulProfiles} profile${successfulProfiles === 1 ? '' : 's'}`,
+          `${totalNewPosts} new posts found`,
+          `${totalUpdatedPosts} posts updated`,
+          totalPostsWithEngagementUpdates > 0 ? `${totalPostsWithEngagementUpdates} posts need engagement re-scraping` : null
+        ].filter(Boolean).join(', ')
+
+        setSuccess(statsMessage)
+        
+        // Reload posts to show new data
+        await loadPosts()
       } else {
         progressTracking.updateStep('saving', {
           id: 'saving',
-          label: `Completed ${successfulProfiles}/${profilesToScrape.length} profiles`,
-          status: successfulProfiles > 0 ? 'completed' : 'error',
-          errorMessage: successfulProfiles === 0 ? 'No profiles could be scraped' : undefined
+          label: `Failed to scrape any profiles`,
+          status: 'error',
+          errorMessage: 'No profiles could be scraped successfully'
         })
+        setError('Failed to scrape any profiles')
       }
       
       progressTracking.completeProgress()
@@ -2218,7 +2511,7 @@ export default function PostsPage() {
                     </span>
                   </div>
                   
-                  {(previewPost.reactions_count || previewPost.comments_count) && (
+                  {((previewPost.reactions_count && previewPost.reactions_count > 0) || (previewPost.comments_count && previewPost.comments_count > 0)) && (
                     <>
                       <h4 className="font-medium text-sm text-gray-700 mb-2">Scraped Data</h4>
                       <div className="flex gap-4 text-sm">
@@ -2232,32 +2525,6 @@ export default function PostsPage() {
                                   </>
             )}
             
-            {/* Quick action for starred posts */}
-            {starredPostsCount > 0 && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  // Get all starred post IDs
-                  const starredPostIds = posts
-                    .filter(post => post.starred === true)
-                    .map(post => post.id)
-                  
-                  // Set them as selected
-                  setSelectedPosts(new Set(starredPostIds))
-                  
-                  // Trigger metadata scraping
-                  setTimeout(() => {
-                    handleAction('metadata')
-                  }, 100)
-                }}
-                disabled={isSaving}
-                size="sm"
-                className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
-              >
-                <Star className="h-4 w-4 mr-1 text-yellow-500" />
-                Scrape All Starred Posts ({starredPostsCount})
-              </Button>
-            )}
           </div>
         )}
 
@@ -2307,9 +2574,12 @@ export default function PostsPage() {
                 <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
                   {engagementData?.profiles.map((profile: Record<string, unknown>, index: number) => (
                     <div key={profile.id as string || index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
-                      <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
-                        {((profile.profiles as Record<string, unknown>)?.name as string)?.charAt(0)?.toUpperCase() || '?'}
-                      </div>
+                      <ProfileAvatar
+                        name={((profile.profiles as Record<string, unknown>)?.name as string) || 'Unknown'}
+                        profilePictures={(profile.profiles as Record<string, unknown>)?.profile_pictures as any}
+                        profilePictureUrl={(profile.profiles as Record<string, unknown>)?.profile_picture_url as string}
+                        size="md"
+                      />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           {((profile.profiles as Record<string, unknown>)?.profile_url as string) ? (

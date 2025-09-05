@@ -245,10 +245,8 @@ async function upsertProfilesWithDualIdentifiers(supabase: SupabaseClient<Databa
         }
         
         results.push(updatedData)
-        // If profile needs enrichment, add to newly upserted list
-        if (needsEnrichment) {
-          newlyUpsertedIds.push(updatedData.id)
-        }
+        // DON'T add existing profiles to newlyUpsertedIds - they're not new!
+        // Only truly new profiles should be in the newly upserted list
       } else {
         console.error('Error updating existing profile:', error)
       }
@@ -274,29 +272,29 @@ async function upsertProfilesWithDualIdentifiers(supabase: SupabaseClient<Databa
 }
 
 // Auto-enrichment function for newly discovered profiles
-async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: string, progressId: string, newlyUpsertedProfileIds: string[]): Promise<EnrichmentResult> {
-  console.log(`🔍 Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`)
+async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: string, progressId: string, newlyUpsertedProfileIds: string[], allProcessedProfileIds: string[]): Promise<EnrichmentResult> {
+  console.log(`🔍 Checking ${newlyUpsertedProfileIds.length} newly created profiles and ${allProcessedProfileIds.length - newlyUpsertedProfileIds.length} updated profiles for enrichment...`)
   
-      // Update progress to show we're checking for enrichment
-    const currentProgress = await getProgress(supabase, progressId)
-    if (currentProgress) {
-      await saveProgress(supabase, progressId, userId, {
-        ...currentProgress,
-        currentStep: `Checking ${newlyUpsertedProfileIds.length} newly discovered profiles for enrichment...`,
-        progress: 91,
-        totalItems: newlyUpsertedProfileIds.length, // Set total for progress tracking
-        processedItems: 0 // Reset processed count
-      })
-    }
+  // Update progress to show we're checking for enrichment
+  const currentProgress = await getProgress(supabase, progressId)
+  if (currentProgress) {
+    await saveProgress(supabase, progressId, userId, {
+      ...currentProgress,
+      currentStep: `Checking ${allProcessedProfileIds.length} profiles for enrichment (${newlyUpsertedProfileIds.length} new, ${allProcessedProfileIds.length - newlyUpsertedProfileIds.length} updated)...`,
+      progress: 91,
+      totalItems: allProcessedProfileIds.length, // Set total for progress tracking
+      processedItems: 0 // Reset processed count
+    })
+  }
   
-  if (!newlyUpsertedProfileIds || newlyUpsertedProfileIds.length === 0) {
-    console.log('✅ No new profiles discovered in this scraping session')
+  if (!allProcessedProfileIds || allProcessedProfileIds.length === 0) {
+    console.log('✅ No profiles processed in this scraping session')
     
-    // Update progress to show no new profiles
+    // Update progress to show no profiles processed
     if (currentProgress) {
       await saveProgress(supabase, progressId, userId, {
         ...currentProgress,
-        currentStep: 'No new profiles discovered • Finishing up...',
+        currentStep: 'No profiles processed • Finishing up...',
         progress: 98
       })
     }
@@ -304,11 +302,11 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
     return { enrichedCount: 0, skipped: false }
   }
   
-  // Find profiles that need enrichment among the newly discovered ones
+  // Find profiles that need enrichment among ALL processed profiles (new + updated)
   const { data: profilesToEnrich, error: profilesError } = await supabase
     .from('profiles')
-    .select('id, profile_url, first_name, enriched_at')
-    .in('id', newlyUpsertedProfileIds) // Only check the newly discovered profiles
+    .select('id, profile_url, first_name, last_enriched_at')
+    .in('id', allProcessedProfileIds) // Check all processed profiles, not just new ones
     .or('first_name.is.null,first_name.eq.')
     .not('profile_url', 'ilike', '%/company/%') // Exclude company profiles
   
@@ -462,7 +460,6 @@ async function autoEnrichProfiles(supabase: SupabaseClient<Database>, userId: st
           public_identifier: basicInfo.public_identifier || null,
           primary_identifier: basicInfo.urn || null,
           secondary_identifier: basicInfo.public_identifier || enrichedProfile.profileUrl || null,
-          enriched_at: new Date().toISOString(),
           last_enriched_at: new Date().toISOString()
         }
         
