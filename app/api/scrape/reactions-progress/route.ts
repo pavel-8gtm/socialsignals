@@ -917,26 +917,36 @@ async function processReactionsScraping(
                 }
               })
 
-              // Delete existing reactions for this post
-              const { error: deleteError } = await supabase
-                .from('reactions')
-                .delete()
-                .eq('user_id', user.id)
-                .eq('post_id', post.id)
+              // Delete existing reactions for this post with timeout protection
+              console.log(`🗑️ Deleting existing reactions for post ${post.id}...`)
+              const { error: deleteError } = await Promise.race([
+                supabase
+                  .from('reactions')
+                  .delete()
+                  .eq('user_id', user.id)
+                  .eq('post_id', post.id),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Delete timeout')), 30000))
+              ]) as { error: Error | null }
 
               if (deleteError) {
                 console.error('Error deleting existing reactions:', deleteError)
                 errors.push(`Failed to delete existing reactions for post ${post.id}: ${deleteError.message}`)
               }
 
-              // Insert reactions
-              const { error: insertError } = await supabase
-                .from('reactions')
-                .insert(reactions)
+              // Insert reactions with timeout protection
+              console.log(`💾 Inserting ${reactions.length} reactions for post ${post.id}...`)
+              const { error: insertError } = await Promise.race([
+                supabase
+                  .from('reactions')
+                  .insert(reactions),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Insert timeout')), 30000))
+              ]) as { error: Error | null }
 
               if (insertError) {
                 console.error('Error inserting reactions:', insertError)
                 errors.push(`Failed to insert reactions for post ${post.id}: ${insertError.message}`)
+              } else {
+                console.log(`✅ Successfully saved ${reactions.length} reactions for post ${post.id}`)
               }
 
               results.push({
@@ -973,15 +983,17 @@ async function processReactionsScraping(
           errors.push(`Failed to update post ${post.id}: ${updateError.message}`)
         }
 
-        // Update progress: Post completed
-        await saveProgress(supabase, progressId, user.id, {
-          status: 'scraping',
-          progress: baseProgress + 8,
-          currentStep: `Completed post ${i + 1} of ${posts.length} (${results[results.length - 1].reactionsCount} reactions found)`,
-          totalPosts: posts.length,
-          processedPosts: i + 1,
-          totalReactions: results.reduce((sum, r) => sum + r.reactionsCount, 0)
-        })
+        // Update progress: Post completed (only update every few posts to reduce database load)
+        if (i % 2 === 0 || i === posts.length - 1) {
+          await saveProgress(supabase, progressId, user.id, {
+            status: 'scraping',
+            progress: baseProgress + 8,
+            currentStep: `Completed post ${i + 1} of ${posts.length} (${results[results.length - 1].reactionsCount} reactions found)`,
+            totalPosts: posts.length,
+            processedPosts: i + 1,
+            totalReactions: results.reduce((sum, r) => sum + r.reactionsCount, 0)
+          })
+        }
 
       } catch (error) {
         console.error(`Error scraping reactions for post ${post.id}:`, error)

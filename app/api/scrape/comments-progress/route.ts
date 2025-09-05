@@ -909,22 +909,30 @@ async function processCommentsScraping(
                 }
               })
 
-              // Delete existing comments for this post
-              const { error: deleteError } = await supabase
-                .from('comments')
-                .delete()
-                .eq('user_id', user.id)
-                .eq('post_id', post.id)
+              // Delete existing comments for this post with timeout protection
+              console.log(`🗑️ Deleting existing comments for post ${post.id}...`)
+              const { error: deleteError } = await Promise.race([
+                supabase
+                  .from('comments')
+                  .delete()
+                  .eq('user_id', user.id)
+                  .eq('post_id', post.id),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Delete timeout')), 30000))
+              ]) as { error: Error | null }
 
               if (deleteError) {
                 console.error('Error deleting existing comments:', deleteError)
                 errors.push(`Failed to delete existing comments for post ${post.id}: ${deleteError.message}`)
               }
 
-              // Insert new comments
-              const { error: insertError } = await supabase
-                .from('comments')
-                .insert(comments)
+              // Insert new comments with timeout protection
+              console.log(`💾 Inserting ${comments.length} comments for post ${post.id}...`)
+              const { error: insertError } = await Promise.race([
+                supabase
+                  .from('comments')
+                  .insert(comments),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Insert timeout')), 30000))
+              ]) as { error: Error | null }
 
               if (insertError) {
                 console.error('❌ Error inserting comments:', insertError)
@@ -966,16 +974,18 @@ async function processCommentsScraping(
           })
         }
 
-        // Update progress: Post completed
-        await saveProgress(supabase, progressId, user.id, {
-          status: 'processing',
-          progress: postProgress + 3,
-          currentStep: `Completed post ${i + 1} of ${posts.length} (${results[results.length - 1].commentsCount} comments found)`,
-          totalPosts: posts.length,
-          processedPosts: i + 1,
-          totalComments: allCommentsData.length,
-          processedComments: results.reduce((sum, r) => sum + r.commentsCount, 0)
-        })
+        // Update progress: Post completed (only update every few posts to reduce database load)
+        if (i % 2 === 0 || i === posts.length - 1) {
+          await saveProgress(supabase, progressId, user.id, {
+            status: 'processing',
+            progress: postProgress + 3,
+            currentStep: `Completed post ${i + 1} of ${posts.length} (${results[results.length - 1].commentsCount} comments found)`,
+            totalPosts: posts.length,
+            processedPosts: i + 1,
+            totalComments: allCommentsData.length,
+            processedComments: results.reduce((sum, r) => sum + r.commentsCount, 0)
+          })
+        }
 
         // Update post with scrape info
         const { error: updateError } = await supabase
