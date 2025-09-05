@@ -530,8 +530,19 @@ export default function PostsPage() {
       await clearEngagementFlagsForPosts(postIds)
 
       // Determine success/failure
-      const reactionsSuccess = (results.find(r => r && typeof r === 'object' && 'totalReactions' in r && 'status' in r) as { status: string } | undefined)?.status === 'completed'
-      const commentsSuccess = (results.find(r => r && typeof r === 'object' && 'totalComments' in r && 'status' in r) as { status: string } | undefined)?.status === 'completed'
+      const reactionsResult = results.find(r => r && typeof r === 'object' && 'totalReactions' in r) as { status?: string, totalReactions?: number } | undefined
+      const commentsResult = results.find(r => r && typeof r === 'object' && 'totalComments' in r) as { status?: string, totalComments?: number } | undefined
+      
+      const reactionsSuccess = reactionsResult?.status === 'completed'
+      const commentsSuccess = commentsResult?.status === 'completed'
+      
+      // Log for debugging
+      console.log('Scraping results:', { 
+        reactionsResult: reactionsResult ? { status: reactionsResult.status, totalReactions: reactionsResult.totalReactions } : null,
+        commentsResult: commentsResult ? { status: commentsResult.status, totalComments: commentsResult.totalComments } : null,
+        reactionsSuccess, 
+        commentsSuccess 
+      })
 
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
       progressTracking.updateProgress(100)
@@ -539,15 +550,25 @@ export default function PostsPage() {
 
       // Set appropriate success/error message
       if (reactionsSuccess && commentsSuccess) {
-        const reactionsData = results.find(r => r && typeof r === 'object' && 'totalReactions' in r) as { totalReactions?: number } | undefined
-        const commentsData = results.find(r => r && typeof r === 'object' && 'totalComments' in r) as { totalComments?: number } | undefined
-        setSuccess(`Successfully scraped both reactions (${reactionsData?.totalReactions || 0}) and comments (${commentsData?.totalComments || 0}) for ${selectedPosts.size} posts`)
+        setSuccess(`Successfully scraped both reactions (${reactionsResult?.totalReactions || 0}) and comments (${commentsResult?.totalComments || 0}) for ${selectedPosts.size} posts`)
       } else if (reactionsSuccess || commentsSuccess) {
         const scraped = reactionsSuccess ? 'reactions' : 'comments'
         const failed = reactionsSuccess ? 'comments' : 'reactions'
-        setSuccess(`Successfully scraped ${scraped} for ${selectedPosts.size} posts. ${failed} scraping had issues.`)
+        const scrapedCount = reactionsSuccess ? reactionsResult?.totalReactions : commentsResult?.totalComments
+        setSuccess(`Successfully scraped ${scraped} (${scrapedCount || 0} found) for ${selectedPosts.size} posts. ${failed} scraping had issues.`)
       } else {
-        setError(`Failed to scrape engagements for ${selectedPosts.size} posts`)
+        // Check if we have any results at all
+        const hasReactionsData = reactionsResult && typeof reactionsResult === 'object'
+        const hasCommentsData = commentsResult && typeof commentsResult === 'object'
+        
+        if (hasReactionsData || hasCommentsData) {
+          // We have data but status is not 'completed' - likely partial success
+          const reactionsCount = reactionsResult?.totalReactions || 0
+          const commentsCount = commentsResult?.totalComments || 0
+          setSuccess(`Engagement scraping completed with some issues. Found ${reactionsCount} reactions and ${commentsCount} comments for ${selectedPosts.size} posts. Some posts may have failed - check individual post status.`)
+        } else {
+          setError(`Failed to scrape engagements for ${selectedPosts.size} posts`)
+        }
       }
       
       setSelectedPosts(new Set()) // Clear selection
