@@ -440,8 +440,20 @@ export type Database = {
     }
     Functions: {
       add_alternative_urn: {
-        Args: { new_urn: string; profile_id: string }
+        Args:
+          | { new_urn: string; profile_id: string }
+          | { new_urn: string; profile_id: string }
         Returns: undefined
+      }
+      find_existing_profile_by_identifiers: {
+        Args: {
+          p_primary_identifier: string
+          p_profile_url: string
+          p_public_identifier: string
+          p_secondary_identifier: string
+          p_urn: string
+        }
+        Returns: string
       }
       find_profile_by_any_urn: {
         Args: { search_urn: string }
@@ -450,6 +462,10 @@ export type Database = {
       get_all_urns_for_profile: {
         Args: { profile_id: string }
         Returns: string[]
+      }
+      merge_existing_duplicates_preserve_timeline: {
+        Args: Record<PropertyKey, never>
+        Returns: number
       }
     }
     Enums: {
