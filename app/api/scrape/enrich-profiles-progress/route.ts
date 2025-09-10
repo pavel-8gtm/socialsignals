@@ -387,7 +387,7 @@ async function processEnrichment(
         
         let updateError = null
         let updatedCount = 0
-        let matchedBy = 'comprehensive_matching'
+        const matchedBy = 'comprehensive_matching'
         
         if (existingProfileId) {
           // Get current profile data to preserve existing information
