@@ -71,7 +71,7 @@ function extractProfileIdentifiersFromComment(author: CommentAuthor) {
   return { primary_identifier, secondary_identifier }
 }
 
-// Sophisticated profile upsert function for comments using dual identifier system
+// Enhanced profile upsert function for comments using comprehensive matching system
 async function upsertCommentProfilesWithDualIdentifiers(supabase: SupabaseClient<Database>, profiles: CommentAuthor[]): Promise<UpsertResult> {
   const results = []
   const newlyUpsertedIds = []
@@ -101,73 +101,26 @@ async function upsertCommentProfilesWithDualIdentifiers(supabase: SupabaseClient
       secondary_identifier
     }
     
-    // Try to find existing profile using multiple strategies
+    // Use the enhanced database function to find existing profile
+    const { data: existingProfileId } = await supabase.rpc('find_existing_profile_by_identifiers', {
+      p_urn: urn,
+      p_primary_identifier: primary_identifier,
+      p_secondary_identifier: secondary_identifier,
+      p_public_identifier: null, // Not available during scraping
+      p_profile_url: author.profile_url
+    })
+    
     let existingProfile = null
-    
-    // Strategy 1: Match by primary_identifier (URN)
-    if (primary_identifier) {
+    if (existingProfileId) {
       const { data } = await supabase
         .from('profiles')
-        .select('id, urn, primary_identifier, secondary_identifier, first_name')
-        .eq('primary_identifier', primary_identifier)
+        .select('id, urn, primary_identifier, secondary_identifier, public_identifier, first_name')
+        .eq('id', existingProfileId)
         .single()
       
       if (data) {
         existingProfile = data
-      }
-    }
-    
-    // Strategy 2: Match by secondary_identifier (vanity URL)
-    if (!existingProfile && secondary_identifier) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('id, urn, primary_identifier, secondary_identifier, first_name')
-        .eq('secondary_identifier', secondary_identifier)
-        .single()
-      
-      if (data) {
-        existingProfile = data
-      }
-    }
-    
-    // Strategy 3: Match by old urn field (for backwards compatibility)
-    if (!existingProfile && urn) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('id, urn, primary_identifier, secondary_identifier, first_name')
-        .eq('urn', urn)
-        .single()
-      
-      if (data) {
-        existingProfile = data
-      }
-    }
-    
-    // Strategy 4: Match by profile_url pattern
-    if (!existingProfile && secondary_identifier) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('id, urn, primary_identifier, secondary_identifier, first_name')
-        .ilike('profile_url', `%${secondary_identifier}%`)
-        .single()
-      
-      if (data) {
-        existingProfile = data
-      }
-    }
-    
-    // Strategy 5: Match by name + headline (for edge cases with completely different identifiers)
-    if (!existingProfile && author.name && author.headline) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('id, urn, primary_identifier, secondary_identifier, first_name')
-        .eq('name', author.name.trim())
-        .eq('headline', author.headline.trim())
-        .single()
-      
-      if (data) {
-        existingProfile = data
-        console.log(`📎 Found existing profile via name+headline match: ${author.name}`)
+        console.log(`🔍 Found existing profile via comprehensive matching: ${author.name} (${existingProfileId})`)
       }
     }
     

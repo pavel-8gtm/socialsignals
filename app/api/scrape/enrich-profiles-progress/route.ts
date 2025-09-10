@@ -376,70 +376,71 @@ async function processEnrichment(
           last_enriched_at: new Date().toISOString()
         }
 
-        // Update profile using comprehensive matching strategies
+        // Use comprehensive matching to find existing profile
+        const { data: existingProfileId } = await supabase.rpc('find_existing_profile_by_identifiers', {
+          p_urn: basicInfo.urn,
+          p_primary_identifier: basicInfo.urn,
+          p_secondary_identifier: basicInfo.public_identifier,
+          p_public_identifier: basicInfo.public_identifier,
+          p_profile_url: enrichedProfile.profileUrl
+        })
+        
         let updateError = null
         let updatedCount = 0
-        let matchedBy = ''
+        let matchedBy = 'comprehensive_matching'
         
-        // Strategy 1: Match by primary_identifier (URN)
-        if (basicInfo.urn) {
-          const { error, data } = await supabase
+        if (existingProfileId) {
+          // Get current profile data to preserve existing information
+          const { data: currentProfile } = await supabase
             .from('profiles')
-            .update(updateData)
-            .eq('primary_identifier', basicInfo.urn)
-            .select()
-          updateError = error
-          updatedCount = data?.length || 0
-          if (updatedCount > 0) matchedBy = 'primary_identifier'
-        }
-        
-        // Strategy 2: Match by secondary_identifier (public identifier)
-        if (updatedCount === 0 && (basicInfo.public_identifier || enrichedProfile.profileUrl)) {
-          const identifier = basicInfo.public_identifier || enrichedProfile.profileUrl
-          const { error, data } = await supabase
-            .from('profiles')
-            .update(updateData)
-            .eq('secondary_identifier', identifier)
-            .select()
-          if (!updateError) updateError = error
-          updatedCount = data?.length || 0
-          if (updatedCount > 0) matchedBy = 'secondary_identifier'
-        }
-        
-        // Strategy 3: Match by legacy URN field (backward compatibility)
-        if (updatedCount === 0 && basicInfo.urn) {
-          const { error, data } = await supabase
-            .from('profiles')
-            .update(updateData)
-            .eq('urn', basicInfo.urn)
-            .select()
-          if (!updateError) updateError = error
-          updatedCount = data?.length || 0
-          if (updatedCount > 0) matchedBy = 'urn'
-        }
-        
-        // Strategy 4: Match by public_identifier in profile_url (legacy)
-        if (updatedCount === 0 && basicInfo.public_identifier) {
-          const { error, data } = await supabase
-            .from('profiles')
-            .update(updateData)
-            .ilike('profile_url', `%${basicInfo.public_identifier}%`)
-            .select()
-          if (!updateError) updateError = error
-          updatedCount = data?.length || 0
-          if (updatedCount > 0) matchedBy = 'profile_url_pattern'
-        }
-        
-        // Strategy 5: Match by profileUrl in profile_url (fallback)
-        if (updatedCount === 0 && enrichedProfile.profileUrl) {
-          const { error, data } = await supabase
-            .from('profiles')
-            .update(updateData)
-            .ilike('profile_url', `%${enrichedProfile.profileUrl}%`)
-            .select()
-          if (!updateError) updateError = error
-          updatedCount = data?.length || 0
-          if (updatedCount > 0) matchedBy = 'profile_url_fallback'
+            .select('*')
+            .eq('id', existingProfileId)
+            .single()
+          
+          if (currentProfile) {
+            // Enhanced update that preserves existing data and adds new information
+            const enhancedUpdateData = {
+              // Personal info (only if not already present or if new data is more complete)
+              first_name: currentProfile.first_name || updateData.first_name,
+              last_name: currentProfile.last_name || updateData.last_name,
+              profile_picture_url: currentProfile.profile_picture_url || updateData.profile_picture_url,
+              
+              // Location (only if not already present)
+              country: currentProfile.country || updateData.country,
+              city: currentProfile.city || updateData.city,
+              
+              // Professional info (update with latest from enrichment)
+              current_title: updateData.current_title || currentProfile.current_title,
+              current_company: updateData.current_company || currentProfile.current_company,
+              is_current_position: updateData.is_current_position,
+              company_linkedin_url: updateData.company_linkedin_url || currentProfile.company_linkedin_url,
+              
+              // Identifiers - ADD missing ones, don't overwrite existing
+              public_identifier: currentProfile.public_identifier || updateData.public_identifier,
+              primary_identifier: currentProfile.primary_identifier || updateData.primary_identifier,
+              secondary_identifier: currentProfile.secondary_identifier || updateData.secondary_identifier,
+              
+              // Update enrichment timestamp
+              last_enriched_at: updateData.last_enriched_at
+            }
+            
+            // Store any new URN formats as alternatives
+            if (basicInfo.urn && basicInfo.urn !== currentProfile.urn) {
+              await supabase.rpc('add_alternative_urn', {
+                new_urn: basicInfo.urn,
+                profile_id: existingProfileId
+              })
+            }
+            
+            const { error, data } = await supabase
+              .from('profiles')
+              .update(enhancedUpdateData)
+              .eq('id', existingProfileId)
+              .select()
+            
+            updateError = error
+            updatedCount = data?.length || 0
+          }
         }
 
         if (updateError) {
