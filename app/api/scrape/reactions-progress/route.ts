@@ -99,11 +99,11 @@ async function upsertProfilesWithDualIdentifiers(supabase: SupabaseClient<Databa
     
     // Use the enhanced database function to find existing profile
     const { data: existingProfileId } = await supabase.rpc('find_existing_profile_by_identifiers', {
-      p_urn: reactor.urn,
-      p_primary_identifier: primary_identifier,
-      p_secondary_identifier: secondary_identifier,
-      p_public_identifier: null, // Not available during scraping
-      p_profile_url: reactor.profile_url
+      p_urn: reactor.urn || '',
+      p_primary_identifier: primary_identifier || '',
+      p_secondary_identifier: secondary_identifier || '',
+      p_public_identifier: '', // Not available during scraping
+      p_profile_url: reactor.profile_url || ''
     })
     
     let existingProfile = null
