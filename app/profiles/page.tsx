@@ -305,10 +305,11 @@ export default function ProfilesPage() {
   const [itemsPerPage] = useState(100)
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company'>('latest_post')
+  const [sortBy, setSortBy] = useState<'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company' | 'public_identifier'>('latest_post')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [showNewProfilesOnly, setShowNewProfilesOnly] = useState(false)
   const [showNeedsEnrichmentOnly, setShowNeedsEnrichmentOnly] = useState(false)
+  const [showEmptyPublicIdentifierOnly, setShowEmptyPublicIdentifierOnly] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null)
   
   // Date filter states
@@ -387,6 +388,7 @@ export default function ProfilesPage() {
       'First Name',
       'Last Name',
       'URN',
+      'Public Identifier',
       'Profile URL',
       'Profile Picture URL',
       'Country',
@@ -413,6 +415,7 @@ export default function ProfilesPage() {
       profile.first_name || '',
       profile.last_name || '',
       profile.urn || '',
+      profile.public_identifier || '',
       profile.profile_url || '',
       profile.profile_picture_url || ((profile.profile_pictures as Record<string, unknown>)?.small as string) || '',
       profile.country || '',
@@ -472,6 +475,7 @@ export default function ProfilesPage() {
         'First Name': profile.first_name || '',
         'Last Name': profile.last_name || '',
         'URN': profile.urn || '',
+        'Public Identifier': profile.public_identifier || '',
         'Profile URL': profile.profile_url || '',
         'Profile Picture URL': profile.profile_picture_url || '',
         'Country': profile.country || '',
@@ -903,17 +907,17 @@ export default function ProfilesPage() {
     // Reset to page 1 and clear selection when filters change
     setCurrentPage(1)
     setSelectedProfiles(new Set())
-  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, dateFilters])
+  }, [searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, showEmptyPublicIdentifierOnly, dateFilters])
 
 
-  const handleSort = (column: 'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company') => {
+  const handleSort = (column: 'name' | 'reactions' | 'comments' | 'posts' | 'latest_post' | 'first_seen' | 'last_enriched_at' | 'location' | 'company' | 'public_identifier') => {
     if (sortBy === column) {
       // Toggle sort order if clicking the same column
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
     } else {
       // Set new column and default to desc for numeric columns, asc for name
       setSortBy(column)
-      setSortOrder(column === 'name' ? 'asc' : 'desc')
+      setSortOrder(column === 'name' || column === 'public_identifier' ? 'asc' : 'desc')
     }
   }
 
@@ -1262,6 +1266,8 @@ export default function ProfilesPage() {
         return [profile.city, profile.country].filter(Boolean).join(', ').toLowerCase()
       case 'company':
         return profile.current_company?.toLowerCase() || ''
+      case 'public_identifier':
+        return profile.public_identifier?.toLowerCase() || ''
       default:
         return 0
     }
@@ -1294,6 +1300,11 @@ export default function ProfilesPage() {
       result = result.filter(profile => !profile.first_name || profile.first_name.trim() === '')
     }
 
+    // Apply empty public identifier filter
+    if (showEmptyPublicIdentifierOnly) {
+      result = result.filter(profile => !profile.public_identifier || profile.public_identifier.trim() === '')
+    }
+
     // Apply date filters
     result = result.filter(profile => {
       // Latest post date filter
@@ -1321,7 +1332,7 @@ export default function ProfilesPage() {
 
       let comparison = 0
       
-      if (sortBy === 'name' || sortBy === 'location' || sortBy === 'company') {
+      if (sortBy === 'name' || sortBy === 'location' || sortBy === 'company' || sortBy === 'public_identifier') {
         // String comparison for text fields
         comparison = (valueA as string).localeCompare(valueB as string)
       } else {
@@ -1334,7 +1345,7 @@ export default function ProfilesPage() {
     })
 
     setFilteredProfiles(result)
-  }, [profiles, searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, dateFilters, getSortValue, isNewProfile])
+  }, [profiles, searchTerm, sortBy, sortOrder, showNewProfilesOnly, showNeedsEnrichmentOnly, showEmptyPublicIdentifierOnly, dateFilters, getSortValue, isNewProfile])
 
   // Effect to trigger filtering and sorting when dependencies change
   useEffect(() => {
@@ -1414,7 +1425,7 @@ export default function ProfilesPage() {
 
         {/* Stats */}
         {!isLoading && profiles.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-3 mb-6">
             <Card>
               <CardContent className="px-4 py-2">
                 <div className="text-2xl font-bold text-blue-600">{profiles.length}</div>
@@ -1444,6 +1455,19 @@ export default function ProfilesPage() {
                 </div>
                 <div className="text-sm text-gray-600">
                   Needs Enrichment
+                </div>
+              </CardContent>
+            </Card>
+            <Card 
+              className="cursor-pointer transition-all duration-200 hover:shadow-md hover:ring-1 hover:ring-amber-300"
+              onClick={() => setShowEmptyPublicIdentifierOnly(!showEmptyPublicIdentifierOnly)}
+            >
+              <CardContent className="px-4 py-2">
+                <div className="text-2xl font-bold text-amber-600">
+                  {profiles.filter(p => !p.public_identifier || p.public_identifier.trim() === '').length}
+                </div>
+                <div className="text-sm text-gray-600">
+                  Empty Public ID
                 </div>
               </CardContent>
             </Card>
@@ -1808,6 +1832,19 @@ export default function ProfilesPage() {
                     </TableHead>
                     <TableHead 
                       className="cursor-pointer hover:bg-gray-50 select-none"
+                      onClick={() => handleSort('public_identifier')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Public ID
+                        {sortBy === 'public_identifier' && (
+                          <span className="text-xs">
+                            {sortOrder === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                    </TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:bg-gray-50 select-none"
                       onClick={() => handleSort('last_enriched_at')}
                     >
                       <div className="flex items-center gap-1">
@@ -1970,6 +2007,15 @@ export default function ProfilesPage() {
                             ? new Date(profile.first_seen).toLocaleDateString()
                             : 'Unknown'
                           }
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm font-mono">
+                          {profile.public_identifier ? (
+                            <span className="text-blue-600">{profile.public_identifier}</span>
+                          ) : (
+                            <span className="text-gray-400 italic">Empty</span>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell>
