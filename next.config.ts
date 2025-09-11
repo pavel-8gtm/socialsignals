@@ -37,10 +37,8 @@ const nextConfig: NextConfig = {
   },
   
   // Exclude supabase functions from the build
-  experimental: {
-    outputFileTracingExcludes: {
-      '*': ['./supabase/functions/**/*'],
-    },
+  outputFileTracingExcludes: {
+    '*': ['./supabase/functions/**/*'],
   },
 };
 
