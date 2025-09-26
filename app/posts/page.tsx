@@ -52,6 +52,7 @@ export default function PostsPage() {
   const [posts, setPosts] = useState<Post[]>([])
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set())
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showProfileDialog, setShowProfileDialog] = useState(false)
   const [isScrapingProfile, setIsScrapingProfile] = useState(false)
@@ -351,6 +352,7 @@ export default function PostsPage() {
       } else {
         setSuccess(`${selectedPosts.size} post${selectedPosts.size !== 1 ? 's' : ''} deleted successfully`)
         setSelectedPosts(new Set())
+        setLastSelectedIndex(null)
         await loadPosts()
       }
     } catch {
@@ -358,13 +360,37 @@ export default function PostsPage() {
     }
   }
 
-  function togglePostSelection(postId: string) {
+  function togglePostSelection(postId: string, index?: number, shiftKey?: boolean) {
     const newSelection = new Set(selectedPosts)
-    if (newSelection.has(postId)) {
-      newSelection.delete(postId)
+    
+    // Handle shift-click range selection
+    if (shiftKey && lastSelectedIndex !== null && index !== undefined) {
+      const startIndex = Math.min(lastSelectedIndex, index)
+      const endIndex = Math.max(lastSelectedIndex, index)
+      
+      // Get the posts in the current filtered and sorted view
+      const currentPosts = filteredAndSortedPosts
+      
+      // Select all posts in the range
+      for (let i = startIndex; i <= endIndex; i++) {
+        if (i < currentPosts.length) {
+          newSelection.add(currentPosts[i].id)
+        }
+      }
     } else {
-      newSelection.add(postId)
+      // Normal toggle behavior
+      if (newSelection.has(postId)) {
+        newSelection.delete(postId)
+      } else {
+        newSelection.add(postId)
+      }
+      
+      // Update last selected index for future shift-clicks
+      if (index !== undefined) {
+        setLastSelectedIndex(index)
+      }
     }
+    
     setSelectedPosts(newSelection)
   }
 
@@ -381,11 +407,13 @@ export default function PostsPage() {
       const newSelected = new Set(selectedPosts)
       filteredIds.forEach(id => newSelected.delete(id))
       setSelectedPosts(newSelected)
+      setLastSelectedIndex(null)
     } else {
       // Select all filtered posts (keeping any existing selections from other filters)
       const newSelected = new Set(selectedPosts)
       filteredIds.forEach(id => newSelected.add(id))
       setSelectedPosts(newSelected)
+      setLastSelectedIndex(null)
     }
   }
 
@@ -618,6 +646,7 @@ export default function PostsPage() {
       }
       
       setSelectedPosts(new Set()) // Clear selection
+      setLastSelectedIndex(null)
       await loadPosts() // Reload posts to show updated data
       
     } catch (error) {
@@ -761,6 +790,7 @@ export default function PostsPage() {
       
       // Clear selection after successful completion
       setSelectedPosts(new Set())
+      setLastSelectedIndex(null)
       
     } catch (error) {
       console.error('Error scraping comments:', error)
@@ -917,6 +947,7 @@ export default function PostsPage() {
       
       // Clear selection after successful completion
       setSelectedPosts(new Set())
+      setLastSelectedIndex(null)
       await loadPosts() // Refresh the UI to show updated metadata
       
       // Show success message with engagement stats
@@ -1169,6 +1200,7 @@ export default function PostsPage() {
       
       // Clear selection after successful completion
       setSelectedPosts(new Set())
+      setLastSelectedIndex(null)
       
     } catch (error) {
       console.error('Error scraping reactions:', error)
@@ -2182,7 +2214,13 @@ export default function PostsPage() {
                       <TableCell>
                         <Checkbox
                           checked={selectedPosts.has(post.id)}
-                          onCheckedChange={() => togglePostSelection(post.id)}
+                          onCheckedChange={() => {
+                            // This will be handled by the onClick event below
+                          }}
+                          onClick={(event: React.MouseEvent) => {
+                            event.preventDefault() // Prevent default to handle manually
+                            togglePostSelection(post.id, index, event.shiftKey)
+                          }}
                           aria-label={`Select post ${post.post_id}`}
                         />
                       </TableCell>
