@@ -265,22 +265,51 @@ async function upsertProfilesWithDualIdentifiers(supabase: any, userId: string, 
       });
 
       if (existingProfileId) {
-        // Update existing profile
-        await supabase.from('profiles').update({
-          name: reactor.name || null,
-          headline: reactor.headline || null,
+        // Fetch existing profile to preserve enriched data
+        const { data: existingProfile } = await supabase
+          .from('profiles')
+          .select('primary_identifier, secondary_identifier, public_identifier, name, headline, profile_picture_url')
+          .eq('id', existingProfileId)
+          .single();
+
+        // Update existing profile - preserve enriched data, only update if new data is available
+        const updateData: any = {
           profile_url: profileUrl,
-          profile_picture_url: reactor.profile_pictures?.large || reactor.profile_pictures?.medium || reactor.profile_pictures?.small || null,
           last_updated: new Date().toISOString(),
-          // Ensure identifiers are populated if missing
-          primary_identifier: identifiers.primary || null,
-          secondary_identifier: identifiers.secondary || null,
-          public_identifier: identifiers.public || null,
           urn: preservedUrn
-        }).eq('id', existingProfileId);
+        };
+
+        // Only update name if we have new data and existing is missing
+        if (reactor.name && (!existingProfile?.name || existingProfile.name.trim() === '')) {
+          updateData.name = reactor.name;
+        }
+
+        // Only update headline if we have new data and existing is missing
+        if (reactor.headline && (!existingProfile?.headline || existingProfile.headline.trim() === '')) {
+          updateData.headline = reactor.headline;
+        }
+
+        // Only update profile picture if we have new data and existing is missing
+        const newProfilePicture = reactor.profile_pictures?.large || reactor.profile_pictures?.medium || reactor.profile_pictures?.small;
+        if (newProfilePicture && (!existingProfile?.profile_picture_url || existingProfile.profile_picture_url.trim() === '')) {
+          updateData.profile_picture_url = newProfilePicture;
+        }
+
+        // PRESERVE ENRICHED IDENTIFIERS: Only update if existing is missing AND we have new data
+        if (identifiers.primary && (!existingProfile?.primary_identifier || existingProfile.primary_identifier.trim() === '')) {
+          updateData.primary_identifier = identifiers.primary;
+        }
+        if (identifiers.secondary && (!existingProfile?.secondary_identifier || existingProfile.secondary_identifier.trim() === '')) {
+          updateData.secondary_identifier = identifiers.secondary;
+        }
+        if (identifiers.public && (!existingProfile?.public_identifier || existingProfile.public_identifier.trim() === '')) {
+          updateData.public_identifier = identifiers.public;
+        }
+
+        await supabase.from('profiles').update(updateData).eq('id', existingProfileId);
 
         allProcessedIds.push(existingProfileId);
-        console.log(`⚡ REACTIONS v17 - Updated existing profile: ${existingProfileId}`);
+        console.log(`⚡ REACTIONS v18 - Updated existing profile: ${existingProfileId} (preserved enriched data)`);
 
       } else {
         // Create new profile
