@@ -242,20 +242,18 @@ export default function PostsPage() {
     })
 
     try {
-      // Get all profiles involved in the scraped posts that need enrichment
-      const profilesFromPosts = await getProfilesFromScrapedPosts(postIds)
+      // Get all profiles that need enrichment (not just from scraped posts)
       const { data: profilesToEnrich, error: profilesError } = await supabase
         .from('profiles')
         .select('id')
         .or('public_identifier.is.null,secondary_identifier.is.null')
-        .in('id', profilesFromPosts)
 
       if (profilesError) {
         console.warn('Error finding profiles to enrich:', profilesError)
         throw new Error('Failed to find profiles for enrichment')
       }
 
-      // Combine new profiles from scraping + existing profiles missing identifiers
+      // Combine new profiles from scraping + all existing profiles missing identifiers
       const allProfilesToEnrich = new Set([
         ...newProfileIds,
         ...(profilesToEnrich?.map(p => p.id) || [])
@@ -281,10 +279,10 @@ export default function PostsPage() {
           const enrichResult = await enrichResponse.json()
           const newProfiles = newProfileIds.length
           const existingProfiles = allProfilesToEnrich.size - newProfileIds.length
-          enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} profiles (${newProfiles} new, ${existingProfiles} existing)`
+          enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} of ${allProfilesToEnrich.size} profiles (${newProfiles} new, ${existingProfiles} existing)`
           progressTracking.updateStep('enrichment', { 
             id: 'enrichment', 
-            label: `Enriched ${enrichResult.profilesEnriched || 0} profiles`, 
+            label: `Enriched ${enrichResult.profilesEnriched || 0} of ${allProfilesToEnrich.size} profiles`, 
             status: 'completed' 
           })
         } else {
