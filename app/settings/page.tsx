@@ -101,7 +101,7 @@ export default function SettingsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [form, supabase])
 
   useEffect(() => {
     loadSettings()

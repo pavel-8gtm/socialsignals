@@ -198,8 +198,8 @@ export default function PostsPage() {
   async function performEnhancedEnrichment(
     postIds: string[], 
     newProfileIds: string[] = [], 
-    session: { id: string } | null,
-    progressTracking: { updateStep: (step: string, data: { id: string; label: string; status: string }) => void }
+    session: { access_token: string; user: { id: string } } | null,
+    progressTracking: { updateStep: (stepId: string, updates: { id?: string; label?: string; status?: 'pending' | 'running' | 'completed' | 'error' }) => void }
   ): Promise<string> {
     let enrichmentMessage = ''
     progressTracking.updateStep('enrichment', { 
@@ -239,6 +239,10 @@ export default function PostsPage() {
           label: `Enriching ${allProfilesToEnrich.size} profiles...`, 
           status: 'running' 
         })
+
+        if (!session) {
+          throw new Error('No valid session for enrichment')
+        }
 
         const enrichResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles-batch`, {
           method: 'POST',
