@@ -193,6 +193,131 @@ export default function PostsPage() {
   const [authorFilter, setAuthorFilter] = useState('')
   const supabase = createClient()
 
+  // Helper function to get all profiles involved in scraped posts
+  async function getProfilesFromScrapedPosts(postIds: string[]): Promise<string[]> {
+    try {
+      // Get all reactor and commenter profile IDs from the scraped posts
+      const [reactionsResult, commentsResult] = await Promise.all([
+        supabase
+          .from('reactions')
+          .select('reactor_profile_id')
+          .in('post_id', postIds)
+          .eq('user_id', user?.id),
+        supabase
+          .from('comments')
+          .select('commenter_profile_id')
+          .in('post_id', postIds)
+          .eq('user_id', user?.id)
+      ])
+
+      const profileIds = new Set<string>()
+      
+      reactionsResult.data?.forEach(r => {
+        if (r.reactor_profile_id) profileIds.add(r.reactor_profile_id)
+      })
+      
+      commentsResult.data?.forEach(c => {
+        if (c.commenter_profile_id) profileIds.add(c.commenter_profile_id)
+      })
+
+      return Array.from(profileIds)
+    } catch (error) {
+      console.error('Error getting profiles from scraped posts:', error)
+      return []
+    }
+  }
+
+  // Enhanced enrichment function that includes existing profiles missing identifiers
+  async function performEnhancedEnrichment(
+    postIds: string[], 
+    newProfileIds: string[] = [], 
+    session: any,
+    progressTracking: any
+  ): Promise<string> {
+    let enrichmentMessage = ''
+    progressTracking.updateStep('enrichment', { 
+      id: 'enrichment', 
+      label: 'Finding profiles to enrich...', 
+      status: 'running' 
+    })
+
+    try {
+      // Get all profiles involved in the scraped posts that need enrichment
+      const profilesFromPosts = await getProfilesFromScrapedPosts(postIds)
+      const { data: profilesToEnrich, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id')
+        .or('public_identifier.is.null,secondary_identifier.is.null')
+        .in('id', profilesFromPosts)
+
+      if (profilesError) {
+        console.warn('Error finding profiles to enrich:', profilesError)
+        throw new Error('Failed to find profiles for enrichment')
+      }
+
+      // Combine new profiles from scraping + existing profiles missing identifiers
+      const allProfilesToEnrich = new Set([
+        ...newProfileIds,
+        ...(profilesToEnrich?.map(p => p.id) || [])
+      ])
+
+      if (allProfilesToEnrich.size > 0) {
+        progressTracking.updateStep('enrichment', { 
+          id: 'enrichment', 
+          label: `Enriching ${allProfilesToEnrich.size} profiles...`, 
+          status: 'running' 
+        })
+
+        const enrichResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles-batch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ profileIds: Array.from(allProfilesToEnrich) }),
+        })
+
+        if (enrichResponse.ok) {
+          const enrichResult = await enrichResponse.json()
+          const newProfiles = newProfileIds.length
+          const existingProfiles = allProfilesToEnrich.size - newProfileIds.length
+          enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} profiles (${newProfiles} new, ${existingProfiles} existing)`
+          progressTracking.updateStep('enrichment', { 
+            id: 'enrichment', 
+            label: `Enriched ${enrichResult.profilesEnriched || 0} profiles`, 
+            status: 'completed' 
+          })
+        } else {
+          const errorText = await enrichResponse.text()
+          console.warn('Profile enrichment failed:', errorText)
+          progressTracking.updateStep('enrichment', { 
+            id: 'enrichment', 
+            label: 'Enrichment failed', 
+            status: 'error' 
+          })
+          enrichmentMessage = ` • ${allProfilesToEnrich.size} profiles found but enrichment failed`
+        }
+      } else {
+        progressTracking.updateStep('enrichment', { 
+          id: 'enrichment', 
+          label: 'No profiles need enrichment', 
+          status: 'completed' 
+        })
+        enrichmentMessage = ' • All profiles already enriched'
+      }
+    } catch (enrichError) {
+      console.warn('Profile enrichment error:', enrichError)
+      progressTracking.updateStep('enrichment', { 
+        id: 'enrichment', 
+        label: 'Enrichment failed', 
+        status: 'error' 
+      })
+      enrichmentMessage = ' • Profile enrichment failed'
+    }
+
+    return enrichmentMessage
+  }
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -901,7 +1026,7 @@ export default function PostsPage() {
       progressTracking.updateStep('scraping', { id: 'scraping', label: 'Fetching metadata...', status: 'running' })
 
       // Call Edge Function directly
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-post-metadata`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-metadata`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1000,7 +1125,7 @@ export default function PostsPage() {
       progressTracking.updateStep('scraping', { id: 'scraping', label: 'Fetching metadata...', status: 'running' })
 
       // Call Edge Function directly
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-post-metadata`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/scrape-metadata`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
