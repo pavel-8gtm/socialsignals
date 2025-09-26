@@ -388,7 +388,6 @@ export default function ProfilesPage() {
       'First Name',
       'Last Name',
       'URN',
-      'Public Identifier',
       'Profile URL',
       'Profile Picture URL',
       'Country',
@@ -415,7 +414,6 @@ export default function ProfilesPage() {
       profile.first_name || '',
       profile.last_name || '',
       profile.urn || '',
-      profile.public_identifier || '',
       profile.profile_url || '',
       profile.profile_picture_url || ((profile.profile_pictures as Record<string, unknown>)?.small as string) || '',
       profile.country || '',
@@ -901,7 +899,7 @@ export default function ProfilesPage() {
 
   useEffect(() => {
     paginateProfiles()
-  }, [filteredProfiles, currentPage])
+  }, [filteredProfiles, currentPage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Reset to page 1 and clear selection when filters change

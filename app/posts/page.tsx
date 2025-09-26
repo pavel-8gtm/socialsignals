@@ -193,46 +193,13 @@ export default function PostsPage() {
   const [authorFilter, setAuthorFilter] = useState('')
   const supabase = createClient()
 
-  // Helper function to get all profiles involved in scraped posts
-  async function getProfilesFromScrapedPosts(postIds: string[]): Promise<string[]> {
-    try {
-      // Get all reactor and commenter profile IDs from the scraped posts
-      const [reactionsResult, commentsResult] = await Promise.all([
-        supabase
-          .from('reactions')
-          .select('reactor_profile_id')
-          .in('post_id', postIds)
-          .eq('user_id', user?.id),
-        supabase
-          .from('comments')
-          .select('commenter_profile_id')
-          .in('post_id', postIds)
-          .eq('user_id', user?.id)
-      ])
-
-      const profileIds = new Set<string>()
-      
-      reactionsResult.data?.forEach(r => {
-        if (r.reactor_profile_id) profileIds.add(r.reactor_profile_id)
-      })
-      
-      commentsResult.data?.forEach(c => {
-        if (c.commenter_profile_id) profileIds.add(c.commenter_profile_id)
-      })
-
-      return Array.from(profileIds)
-    } catch (error) {
-      console.error('Error getting profiles from scraped posts:', error)
-      return []
-    }
-  }
 
   // Enhanced enrichment function that includes existing profiles missing identifiers
   async function performEnhancedEnrichment(
     postIds: string[], 
     newProfileIds: string[] = [], 
-    session: any,
-    progressTracking: any
+    session: { id: string } | null,
+    progressTracking: { updateStep: (step: string, data: { id: string; label: string; status: string }) => void }
   ): Promise<string> {
     let enrichmentMessage = ''
     progressTracking.updateStep('enrichment', { 
@@ -346,7 +313,7 @@ export default function PostsPage() {
       await loadMonitoredProfiles()
     }
     initializeData()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadMonitoredProfiles() {
     try {

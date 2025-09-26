@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import * as z from 'zod'
@@ -72,12 +72,7 @@ export default function SettingsPage() {
     },
   })
 
-  useEffect(() => {
-    loadSettings()
-    loadWebhooks()
-  }, [loadSettings])
-
-  async function loadSettings() {
+  const loadSettings = useCallback(async () => {
     setIsLoading(true)
     setError(null)
 
@@ -106,7 +101,12 @@ export default function SettingsPage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    loadSettings()
+    loadWebhooks()
+  }, [loadSettings])
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsSaving(true)
