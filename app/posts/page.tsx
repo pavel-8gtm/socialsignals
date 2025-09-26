@@ -703,49 +703,13 @@ export default function PostsPage() {
         })
       }
       
-      // 🌟 NEW: Show auto-enrichment progress based on Edge Function results
-      progressTracking.updateStep('enrichment', { id: 'enrichment', label: 'Processing auto-enrichment results...', status: 'running' })
-      progressTracking.updateProgress(80)
-      
-      // Extract enrichment info from Edge Function responses
-      let totalEnrichedProfiles = 0
-      let totalNewProfiles = 0
-      const enrichmentErrors: string[] = []
-      
-      if (reactionsSuccess && reactionsData?.autoEnrichment) {
-        totalEnrichedProfiles += reactionsData.autoEnrichment.profilesEnriched || 0
-        totalNewProfiles += reactionsData.autoEnrichment.newProfilesFound || 0
-        if (reactionsData.autoEnrichment.enrichmentErrors?.length > 0) {
-          enrichmentErrors.push(...reactionsData.autoEnrichment.enrichmentErrors)
-        }
-      }
-      
-      if (commentsSuccess && commentsData?.autoEnrichment) {
-        totalEnrichedProfiles += commentsData.autoEnrichment.profilesEnriched || 0
-        totalNewProfiles += commentsData.autoEnrichment.newProfilesFound || 0
-        if (commentsData.autoEnrichment.enrichmentErrors?.length > 0) {
-          enrichmentErrors.push(...commentsData.autoEnrichment.enrichmentErrors)
-        }
-      }
-      
-      // Update enrichment step with results
-      let enrichmentLabel = 'Auto-enrichment completed'
-      if (totalNewProfiles > 0) {
-        if (totalEnrichedProfiles > 0) {
-          enrichmentLabel = `Auto-enriched ${totalEnrichedProfiles} of ${totalNewProfiles} new profiles`
-        } else {
-          enrichmentLabel = `Found ${totalNewProfiles} new profiles (no enrichment needed)`
-        }
-      } else {
-        enrichmentLabel = 'No new profiles found'
-      }
-      
-      progressTracking.updateStep('enrichment', { 
-        id: 'enrichment', 
-        label: enrichmentLabel, 
-        status: enrichmentErrors.length > 0 ? 'error' : 'completed',
-        errorMessage: enrichmentErrors.length > 0 ? enrichmentErrors.join('; ') : undefined
-      })
+      // 🆕 ENHANCED: Perform comprehensive auto-enrichment after both scraping operations
+      const enrichmentMessage = await performEnhancedEnrichment(
+        postIds,
+        [], // No specific new profiles since individual functions already handled them
+        session,
+        progressTracking
+      )
       
       progressTracking.updateStep('saving', { id: 'saving', label: 'Finalizing...', status: 'running' })
       progressTracking.updateProgress(90)
@@ -760,12 +724,12 @@ export default function PostsPage() {
       // Set appropriate success/error message with detailed stats
       if (reactionsSuccess && commentsSuccess) {
         const totalEngagement = (reactionsData?.totalReactions || 0) + (commentsData?.totalComments || 0)
-        setSuccess(`Successfully scraped ${reactionsData?.totalReactions || 0} reactions and ${commentsData?.totalComments || 0} comments (${totalEngagement} total) for ${selectedPosts.size} posts`)
+        setSuccess(`Successfully scraped ${reactionsData?.totalReactions || 0} reactions and ${commentsData?.totalComments || 0} comments (${totalEngagement} total) for ${selectedPosts.size} posts${enrichmentMessage}`)
       } else if (reactionsSuccess || commentsSuccess) {
         const scraped = reactionsSuccess ? 'reactions' : 'comments'
         const failed = reactionsSuccess ? 'comments' : 'reactions'
         const scrapedCount = reactionsSuccess ? reactionsData?.totalReactions : commentsData?.totalComments
-        setSuccess(`Successfully scraped ${scrapedCount || 0} ${scraped} for ${selectedPosts.size} posts. ${failed} scraping had issues.`)
+        setSuccess(`Successfully scraped ${scrapedCount || 0} ${scraped} for ${selectedPosts.size} posts. ${failed} scraping had issues.${enrichmentMessage}`)
       } else {
         setError(`Failed to scrape engagements for ${selectedPosts.size} posts. Check the logs for details.`)
       }
@@ -849,60 +813,13 @@ export default function PostsPage() {
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
 
-      // 🆕 NEW: Trigger profile enrichment if profiles were found
-      let enrichmentMessage = ''
-      if (result.profiles?.profileIds?.length > 0) {
-        progressTracking.updateStep('enrichment', { 
-          id: 'enrichment', 
-          label: `Enriching ${result.profiles.totalProfilesProcessed} profiles...`, 
-          status: 'running' 
-        })
-
-        try {
-          const enrichResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles-batch`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({ profileIds: result.profiles.profileIds }),
-          })
-
-          if (enrichResponse.ok) {
-            const enrichResult = await enrichResponse.json()
-            enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} profiles`
-            progressTracking.updateStep('enrichment', { 
-              id: 'enrichment', 
-              label: `Enriched ${enrichResult.profilesEnriched || 0} profiles`, 
-              status: 'completed' 
-            })
-          } else {
-            const errorText = await enrichResponse.text()
-            console.warn('Profile enrichment failed:', errorText)
-            progressTracking.updateStep('enrichment', { 
-              id: 'enrichment', 
-              label: 'Enrichment failed (profiles saved without enrichment)', 
-              status: 'error' 
-            })
-            enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
-          }
-        } catch (enrichError) {
-          console.warn('Profile enrichment error:', enrichError)
-          progressTracking.updateStep('enrichment', { 
-            id: 'enrichment', 
-            label: 'Enrichment failed (profiles saved without enrichment)', 
-            status: 'error' 
-          })
-          enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
-        }
-      } else {
-        progressTracking.updateStep('enrichment', { 
-          id: 'enrichment', 
-          label: 'No new profiles to enrich', 
-          status: 'completed' 
-        })
-        enrichmentMessage = ' • No new profiles found'
-      }
+      // 🆕 ENHANCED: Auto-enrich profiles (new + existing missing public_identifier)
+      const enrichmentMessage = await performEnhancedEnrichment(
+        postIds,
+        result.profiles?.profileIds || [],
+        session,
+        progressTracking
+      )
 
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
@@ -1259,60 +1176,13 @@ export default function PostsPage() {
       progressTracking.updateStep('processing', { id: 'processing', label: 'Completed', status: 'completed' })
       progressTracking.updateStep('saving', { id: 'saving', label: 'Completed', status: 'completed' })
 
-      // 🆕 NEW: Trigger profile enrichment if profiles were found
-      let enrichmentMessage = ''
-      if (result.profiles?.profileIds?.length > 0) {
-        progressTracking.updateStep('enrichment', { 
-          id: 'enrichment', 
-          label: `Enriching ${result.profiles.totalProfilesProcessed} profiles...`, 
-          status: 'running' 
-        })
-
-        try {
-          const enrichResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-profiles-batch`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({ profileIds: result.profiles.profileIds }),
-          })
-
-          if (enrichResponse.ok) {
-            const enrichResult = await enrichResponse.json()
-            enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} profiles`
-            progressTracking.updateStep('enrichment', { 
-              id: 'enrichment', 
-              label: `Enriched ${enrichResult.profilesEnriched || 0} profiles`, 
-              status: 'completed' 
-            })
-          } else {
-            const errorText = await enrichResponse.text()
-            console.warn('Profile enrichment failed:', errorText)
-            progressTracking.updateStep('enrichment', { 
-              id: 'enrichment', 
-              label: 'Enrichment failed (profiles saved without enrichment)', 
-              status: 'error' 
-            })
-            enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
-          }
-        } catch (enrichError) {
-          console.warn('Profile enrichment error:', enrichError)
-          progressTracking.updateStep('enrichment', { 
-            id: 'enrichment', 
-            label: 'Enrichment failed (profiles saved without enrichment)', 
-            status: 'error' 
-          })
-          enrichmentMessage = ` • ${result.profiles.newProfilesFound} new profiles (enrichment failed)`
-        }
-      } else {
-        progressTracking.updateStep('enrichment', { 
-          id: 'enrichment', 
-          label: 'No new profiles to enrich', 
-          status: 'completed' 
-        })
-        enrichmentMessage = ' • No new profiles found'
-      }
+      // 🆕 ENHANCED: Auto-enrich profiles (new + existing missing public_identifier)
+      const enrichmentMessage = await performEnhancedEnrichment(
+        postIds,
+        result.profiles?.profileIds || [],
+        session,
+        progressTracking
+      )
 
       progressTracking.updateProgress(100)
       progressTracking.completeProgress()
