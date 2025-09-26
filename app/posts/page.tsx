@@ -242,21 +242,28 @@ export default function PostsPage() {
     })
 
     try {
-      // Get all profiles that need enrichment (not just from scraped posts)
+      // Get all profiles that need enrichment (missing identifiers OR missing basic info)
       const { data: profilesToEnrich, error: profilesError } = await supabase
         .from('profiles')
-        .select('id')
-        .or('public_identifier.is.null,secondary_identifier.is.null')
+        .select('id, public_identifier, secondary_identifier, first_name')
+        
+      // Filter in JavaScript to handle empty strings properly
+      const profilesToEnrichFiltered = profilesToEnrich?.filter(profile => 
+        !profile.public_identifier || 
+        !profile.secondary_identifier || 
+        !profile.first_name || 
+        profile.first_name.trim() === ''
+      ) || []
 
       if (profilesError) {
         console.warn('Error finding profiles to enrich:', profilesError)
         throw new Error('Failed to find profiles for enrichment')
       }
 
-      // Combine new profiles from scraping + all existing profiles missing identifiers
+      // Combine new profiles from scraping + all existing profiles needing enrichment
       const allProfilesToEnrich = new Set([
         ...newProfileIds,
-        ...(profilesToEnrich?.map(p => p.id) || [])
+        ...profilesToEnrichFiltered.map(p => p.id)
       ])
 
       if (allProfilesToEnrich.size > 0) {
@@ -279,7 +286,7 @@ export default function PostsPage() {
           const enrichResult = await enrichResponse.json()
           const newProfiles = newProfileIds.length
           const existingProfiles = allProfilesToEnrich.size - newProfileIds.length
-          enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} of ${allProfilesToEnrich.size} profiles (${newProfiles} new, ${existingProfiles} existing)`
+          enrichmentMessage = ` • Enriched ${enrichResult.profilesEnriched || 0} of ${allProfilesToEnrich.size} profiles (${newProfiles} new, ${existingProfiles} missing data)`
           progressTracking.updateStep('enrichment', { 
             id: 'enrichment', 
             label: `Enriched ${enrichResult.profilesEnriched || 0} of ${allProfilesToEnrich.size} profiles`, 
